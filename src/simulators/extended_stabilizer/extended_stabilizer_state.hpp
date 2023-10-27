@@ -37,6 +37,7 @@ const Operations::OpSet StateOpSet(
         Operations::OpType::gate,
         Operations::OpType::measure,
         Operations::OpType::reset,
+        Operations::OpType::projection,
         Operations::OpType::barrier,
         Operations::OpType::roerror,
         Operations::OpType::bfunc,
@@ -125,6 +126,9 @@ protected:
   // Reset the specified qubits to the |0> state by measuring the
   // projectors Id+Z_{i} for each qubit i
   void apply_reset(const reg_t &qubits, AER::RngEngine &rng);
+
+  // Apply projection
+  void apply_projection(const reg_t &qubits, const cvector_t &params);
 
   const static stringmap_t<Gates> gateset_;
 

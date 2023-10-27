@@ -219,6 +219,7 @@ class StatevectorSimulator(AerBackend):
         "custom_instructions": sorted(
             [
                 "kraus",
+                "projection",
                 "roerror",
                 "quantum_channel",
                 "qerror_loc",

@@ -172,6 +172,7 @@ void bind_aer_state(MODULE m) {
   aer_state.def("apply_mcswap", &AerState::apply_mcswap);
   aer_state.def("apply_measure", &AerState::apply_measure);
   aer_state.def("apply_reset", &AerState::apply_reset);
+  aer_state.def("apply_projection", &AerState::apply_projection);
   aer_state.def("apply_kraus", &AER::AerState::apply_kraus);
   aer_state.def("probability", &AerState::probability);
   aer_state.def(

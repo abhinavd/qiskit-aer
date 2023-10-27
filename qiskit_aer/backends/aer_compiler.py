@@ -847,6 +847,8 @@ def _assemble_op(
         aer_circ.multiplexer(qubits, params, conditional_reg, aer_cond_expr, label if label else name)
     elif name == "kraus":
         aer_circ.kraus(qubits, params, conditional_reg, aer_cond_expr)
+    elif name == "projection":
+        aer_circ.projection(qubits, params)
     elif name in {
         "save_statevector",
         "save_statevector_dict",

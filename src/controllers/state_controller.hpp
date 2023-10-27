@@ -331,6 +331,10 @@ public:
   // then discarding the outcome.
   void apply_reset(const reg_t &qubits);
 
+  // Project the specified qubits to the specified state `meas_state` by applying the projection
+  // operator. Does not normalise the output state
+  void apply_projection(const reg_t &qubits, const cvector_t &params);
+
   // Apply a Kraus error operation
   void apply_kraus(const reg_t &qubits, const std::vector<cmatrix_t> &krausops);
 
@@ -1351,6 +1355,20 @@ void AerState::apply_reset(const reg_t &qubits) {
 
   last_result_ = ExperimentResult();
   state_->apply_op(op, last_result_, rng_);
+}
+
+void AerState::apply_projection(const reg_t &qubits, const cvector_t &params) {
+  assert_initialized();
+
+  flush_ops();
+
+  Operations::Op op;
+  op.type = Operations::OpType::projection; //Gotta define this object as well
+  op.name = "projection";
+  op.qubits = qubits;
+  op.params = params;
+  // state_->apply_op(op, last_result_, rng_); Figure out what to do here.
+  buffer_op(std::move(op)); //Copied from Kraus
 }
 
 void AerState::apply_kraus(const reg_t &qubits,

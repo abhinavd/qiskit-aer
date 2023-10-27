@@ -275,6 +275,10 @@ public:
     ops.push_back(Operations::make_reset(qubits, cond_regidx));
   }
 
+  void projection(const reg_t &qubits, const cvector_t &params) {
+    ops.push_back(Operations::make_projection(qubits, params));
+  }
+
 private:
   Operations::OpSet opset_;       // Set of operation types contained in circuit
   std::set<uint_t> qubitset_;     // Set of qubits used in the circuit

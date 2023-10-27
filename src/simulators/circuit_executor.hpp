@@ -1253,6 +1253,7 @@ bool Executor<state_t>::check_measure_sampling_opt(const Circuit &circ) const {
   // TODO:
   // * Resets should be allowed if applied to |0> state (no gates before).
   if (circ.opset().contains(Operations::OpType::reset) ||
+      circ.opset().contains(Operations::OpType::projection) ||
       circ.opset().contains(Operations::OpType::kraus) ||
       circ.opset().contains(Operations::OpType::superop) ||
       circ.opset().contains(Operations::OpType::jump) ||

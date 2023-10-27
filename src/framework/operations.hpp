@@ -362,6 +362,7 @@ enum class OpType {
   gate,
   measure,
   reset,
+  projection,
   bfunc,
   barrier,
   qerror_loc,
@@ -435,6 +436,9 @@ inline std::ostream &operator<<(std::ostream &stream, const OpType &type) {
     break;
   case OpType::reset:
     stream << "reset";
+    break;
+  case OpType::projection:
+    stream << "projection";
     break;
   case OpType::bfunc:
     stream << "bfunc";
@@ -1017,6 +1021,15 @@ inline Op make_reset(const reg_t &qubits, const int_t conditional) {
   return op;
 }
 
+inline Op make_projection(const reg_t &qubits, const cvector_t &params) {
+  Op op;
+  op.type = OpType::projection;
+  op.name = "projection";
+  op.qubits = qubits;
+  op.params = params;
+  return op;
+}
+
 inline Op make_multiplexer(const reg_t &qubits,
                            const std::vector<cmatrix_t> &mats,
                            const int_t conditional = -1,
@@ -1349,6 +1362,8 @@ Op input_to_op_measure(const inputdata_t &input);
 template <typename inputdata_t>
 Op input_to_op_reset(const inputdata_t &input);
 template <typename inputdata_t>
+Op input_to_op_projection(const inputdata_t &input);
+template <typename inputdata_t>
 Op input_to_op_bfunc(const inputdata_t &input);
 template <typename inputdata_t>
 Op input_to_op_initialize(const inputdata_t &input);
@@ -1426,6 +1441,8 @@ Op input_to_op(const inputdata_t &input) {
     return input_to_op_measure(input);
   if (name == "reset")
     return input_to_op_reset(input);
+  if (name == "projection")
+    return input_to_op_projection(input);
   if (name == "initialize")
     return input_to_op_initialize(input);
   // Arbitrary matrix gates
@@ -1642,6 +1659,23 @@ Op input_to_op_reset(const inputdata_t &input) {
   op.type = OpType::reset;
   op.name = "reset";
   Parser<inputdata_t>::get_value(op.qubits, "qubits", input);
+
+  // Conditional
+  add_conditional(Allowed::No, op, input);
+
+  // Validation
+  check_empty_qubits(op);
+  check_duplicate_qubits(op);
+  return op;
+}
+
+template <typename inputdata_t>
+Op input_to_op_projection(const inputdata_t &input) {
+  Op op;
+  op.type = OpType::projection;
+  op.name = "projection";
+  Parser<inputdata_t>::get_value(op.qubits, "qubits", input);
+  Parser<inputdata_t>::get_value(op.params, "params", input);
 
   // Conditional
   add_conditional(Allowed::No, op, input);

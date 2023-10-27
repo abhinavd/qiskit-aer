@@ -99,6 +99,10 @@ protected:
   // then discarding the outcome.
   void apply_reset(const reg_t &qubits, RngEngine &rng);
 
+  // Project the specified qubits to the specified state `meas_state` by applying the projection
+  // operator. Does not normalise the output state
+  void apply_projection(const reg_t &qubits, const cvector_t &params);
+
   // Initialize the specified qubits to a given state |psi>
   // by applying a reset to the these qubits and then
   // computing the tensor product with the new state |psi>
@@ -115,6 +119,7 @@ protected:
   void apply_reset(CircuitExecutor::Branch &root, const reg_t &qubits);
   void apply_initialize(CircuitExecutor::Branch &root, const reg_t &qubits,
                         const cvector_t &params);
+  void apply_projection(CircuitExecutor::Branch &root, const reg_t &qubits, const cvector_t &params);
   void apply_kraus(CircuitExecutor::Branch &root, const reg_t &qubits,
                    const std::vector<cmatrix_t> &kmats);
 
@@ -193,6 +198,8 @@ protected:
   void apply_measure(CircuitExecutor::Branch &root, const reg_t &qubits,
                      const reg_t &cmemory, const reg_t &cregister);
 
+  void measure_update_without_normalisation(const std::vector<uint_t> &qubits, const cvector_t &params);
+
   std::vector<reg_t> sample_measure(state_t &state, const reg_t &qubits,
                                     uint_t shots,
                                     std::vector<RngEngine> &rng) const override;
@@ -250,6 +257,9 @@ bool Executor<state_t>::apply_parallel_op(const Operations::Op &op,
     case Operations::OpType::reset:
       apply_reset(op.qubits, rng);
       break;
+    case Operations::OpType::projection:
+      apply_projection(op.qubits, op.params);
+    break;
     case Operations::OpType::initialize:
       apply_initialize(op.qubits, op.params, rng);
       break;
@@ -393,6 +403,9 @@ bool Executor<state_t>::apply_branching_op(CircuitExecutor::Branch &root,
     case Operations::OpType::reset:
       apply_reset(root, op.qubits);
       break;
+    case Operations::OpType::projection:
+      apply_projection(root, op.qubits, op.params);
+    break;
     case Operations::OpType::initialize:
       apply_initialize(root, op.qubits, op.params);
       break;
@@ -1031,6 +1044,14 @@ void Executor<state_t>::apply_reset(const reg_t &qubits, RngEngine &rng) {
 }
 
 template <class state_t>
+void Executor<state_t>::apply_projection(const reg_t &qubits, const cvector_t &params) {
+  // Simulate unobserved measurement
+  // const auto meas = sample_measure_with_prob(qubits, rng);
+  // Apply update to reset state
+  measure_update_without_normalisation(qubits, params);
+}
+
+template <class state_t>
 std::pair<uint_t, double>
 Executor<state_t>::sample_measure_with_prob(const reg_t &qubits,
                                             RngEngine &rng) {
@@ -1138,6 +1159,62 @@ void Executor<state_t>::measure_reset_update(const std::vector<uint_t> &qubits,
             BasePar::apply_chunk_x(qubits[i]);
           }
         }
+      }
+    }
+  }
+}
+
+// Creating my own instruction for projection
+
+
+template <class state_t>
+void Executor<state_t>::measure_update_without_normalisation(const std::vector<uint_t> &qubits, const cvector_t &params) {
+  // Update a state vector based on an outcome pair [m, p] from
+  // sample_measure_with_prob function, and a desired post-measurement
+  // final_state. Return unnormalised state
+  uint meas_state = int(std::real(params[0]));
+  // Single-qubit case
+  if (qubits.size() == 1) {
+    // Diagonal matrix for projecting and renormalizing to measurement outcome
+    cvector_t mdiag(2, 0.); //Gives array of size two filled  with zeros 
+    mdiag[meas_state] = 1.; // / std::sqrt(meas_prob); Commenting removes normalisation
+
+    if (BasePar::chunk_omp_parallel_ && Base::num_groups_ > 1) {
+#pragma omp parallel for
+      for (int_t ig = 0; ig < Base::num_groups_; ig++) {
+        for (int_t ic = Base::top_state_of_group_[ig];
+             ic < Base::top_state_of_group_[ig + 1]; ic++)
+          Base::states_[ic].apply_diagonal_matrix(qubits, mdiag);
+      }
+    } else {
+      for (int_t ig = 0; ig < Base::num_groups_; ig++) {
+        for (int_t ic = Base::top_state_of_group_[ig];
+             ic < Base::top_state_of_group_[ig + 1]; ic++)
+          Base::states_[ic].apply_diagonal_matrix(qubits, mdiag);
+      }
+    }
+
+    // If it doesn't agree with the reset state update
+  }
+  // Multi qubit case
+  else {
+    // Diagonal matrix for projecting and renormalizing to measurement outcome
+    const size_t dim = 1ULL << qubits.size();
+    cvector_t mdiag(dim, 0.);
+    mdiag[meas_state] = 1.; // / std::sqrt(meas_prob);
+
+    if (BasePar::chunk_omp_parallel_ && Base::num_groups_ > 1) {
+#pragma omp parallel for
+      for (int_t ig = 0; ig < Base::num_groups_; ig++) {
+        for (int_t ic = Base::top_state_of_group_[ig];
+             ic < Base::top_state_of_group_[ig + 1]; ic++)
+          Base::states_[ic].apply_diagonal_matrix(qubits, mdiag);
+      }
+    } else {
+      for (int_t ig = 0; ig < Base::num_groups_; ig++) {
+        for (int_t ic = Base::top_state_of_group_[ig];
+             ic < Base::top_state_of_group_[ig + 1]; ic++)
+          Base::states_[ic].apply_diagonal_matrix(qubits, mdiag);
       }
     }
   }
@@ -1596,6 +1673,12 @@ void Executor<state_t>::apply_reset(CircuitExecutor::Branch &root,
   rvector_t probs = sample_measure_with_prob(root, qubits);
 
   measure_reset_update(root, qubits, 0, probs);
+}
+
+template <class state_t>
+void Executor<state_t>::apply_projection(CircuitExecutor::Branch &root,
+                                    const reg_t &qubits, const cvector_t &params) {
+  apply_projection(root, qubits, params);
 }
 
 template <class state_t>

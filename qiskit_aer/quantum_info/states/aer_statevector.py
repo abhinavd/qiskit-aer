@@ -260,6 +260,8 @@ class AerStatevector(Statevector):
                 pass
             elif inst.name == "reset":
                 aer_state.apply_reset(qubits)
+            elif inst.name == "projection":
+                aer_state.apply_projection(qubits,inst.params) # Gotta define params for projections
             else:
                 applied = False
         elif inst.name == "kraus":

@@ -226,6 +226,7 @@ public:
     switch (op.type) {
     case optype_t::kraus:
     case optype_t::reset:
+    case optype_t::projection:
     case optype_t::superop: {
       return op.qubits.size() <= max_fused_qubits;
     }
@@ -276,6 +277,7 @@ public:
     switch (op.type) {
     case optype_t::kraus:
     case optype_t::reset:
+    case optype_t::projection:
     case optype_t::superop: {
       return op.qubits.size() <= max_fused_qubits;
     }
@@ -301,6 +303,7 @@ FusionMethod &FusionMethod::find_method(const Circuit &circ,
   if (allow_superop && allowed_opset.contains(optype_t::superop) &&
       (circ.opset().contains(optype_t::kraus) ||
        circ.opset().contains(optype_t::superop) ||
+       circ.opset().contains(optype_t::projection) ||
        circ.opset().contains(optype_t::reset))) {
     return superOp;
   } else if (allow_kraus && allowed_opset.contains(optype_t::kraus) &&

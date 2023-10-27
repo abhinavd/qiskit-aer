@@ -16,6 +16,7 @@ Qiskit Aer simulator name mapping for Target object
 """
 from qiskit.circuit import ControlledGate, Parameter
 from qiskit.circuit.reset import Reset
+from qiskit.circuit.instruction import Instruction
 from qiskit.circuit.library import (
     SXGate,
     MCPhaseGate,
@@ -253,6 +254,20 @@ class MCSwapGate(ControlledGate):
             base_gate=SwapGate(),
         )
 
+class Projection(Instruction):
+    """projection operation: nonunitary, unnormalised"""
+    def __init__(self, label=None, *, duration=None, unit="dt"):
+        """Create new projection instruction"""
+        super().__init__(
+            "projection",
+            1,
+            0,
+            params=self.params,
+            label=label,
+            duration=duration,
+            unit=unit
+        )
+
 
 PHI = Parameter("phi")
 LAM = Parameter("lam")
@@ -268,6 +283,7 @@ NAME_MAPPING = {
     "roerror": ReadoutError,
     "mcrx": MCRXGate,
     "kraus": Kraus,
+    "projection": Projection,
     "save_statevector_dict": SaveStatevectorDict,
     "mcx": MCXGate,
     "mcu1": MCU1Gate,

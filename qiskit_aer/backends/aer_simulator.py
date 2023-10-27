@@ -500,6 +500,7 @@ class AerSimulator(AerBackend):
                 "qerror_loc",
                 "roerror",
                 "kraus",
+                "projection"
                 "save_expval",
                 "save_expval_var",
                 "save_probabilities",

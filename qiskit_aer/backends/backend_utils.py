@@ -110,6 +110,7 @@ BASIS_GATES = {
             "mcx_gray",
             "ecr",
             "reset",
+            "projection",
             "switch_case",
         ]
     ),

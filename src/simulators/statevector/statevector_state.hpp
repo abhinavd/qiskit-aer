@@ -42,6 +42,7 @@ const Operations::OpSet StateOpSet(
     {OpType::gate,
      OpType::measure,
      OpType::reset,
+     OpType::projection,
      OpType::initialize,
      OpType::barrier,
      OpType::bfunc,
@@ -189,6 +190,10 @@ public:
   // then discarding the outcome.
   void apply_reset(const reg_t &qubits, RngEngine &rng);
 
+  // Project the specified qubits to the specified state `meas_state` by applying the projection
+  // operator. Does not normalise the output state
+  void apply_projection(const reg_t &qubits, const cvector_t &params);
+
   // Initialize the specified qubits to a given state |psi>
   // by applying a reset to the these qubits and then
   // computing the tensor product with the new state |psi>
@@ -280,6 +285,8 @@ protected:
   void measure_reset_update(const std::vector<uint_t> &qubits,
                             const uint_t final_state, const uint_t meas_state,
                             const double meas_prob);
+
+  void measure_update_without_normalisation(const std::vector<uint_t> &qubits, const cvector_t &params);
 
   // Helper function to convert a vector to a reduced density matrix
   template <class T>
@@ -509,6 +516,9 @@ void State<statevec_t>::apply_op(const Operations::Op &op,
     case OpType::reset:
       apply_reset(op.qubits, rng);
       break;
+    case OpType::projection:
+      apply_projection(op.qubits, op.params);
+    break;
     case OpType::initialize:
       apply_initialize(op.qubits, op.params, rng);
       break;
@@ -966,6 +976,12 @@ void State<statevec_t>::apply_reset(const reg_t &qubits, RngEngine &rng) {
 }
 
 template <class statevec_t>
+void State<statevec_t>::apply_projection(const reg_t &qubits, const cvector_t &params) {
+  // Simulate measurement
+  measure_update_without_normalisation(qubits, params);
+}
+
+template <class statevec_t>
 std::pair<uint_t, double>
 State<statevec_t>::sample_measure_with_prob(const reg_t &qubits,
                                             RngEngine &rng) {
@@ -1051,6 +1067,31 @@ std::vector<reg_t> State<statevec_t>::sample_measure(const reg_t &qubits,
   }
 
   return all_samples;
+}
+
+template <class statevec_t>
+void State<statevec_t>::measure_update_without_normalisation(const std::vector<uint_t> &qubits, const cvector_t &params) {
+  // Update a state vector based on an outcome [m] given as input
+  // Return unnormalised state
+  uint meas_state = int(std::real(params[0]));
+  // Single-qubit case
+  if (qubits.size() == 1) {
+    // Diagonal matrix for projecting and renormalizing to measurement outcome
+    cvector_t mdiag(2, 0.);
+    mdiag[meas_state] = 1.; // / std::sqrt(meas_prob);
+
+    BaseState::qreg_.apply_diagonal_matrix(qubits, mdiag);
+
+  }
+  // Multi qubit case
+  else {
+    // Diagonal matrix for projecting and renormalizing to measurement outcome
+    const size_t dim = 1ULL << qubits.size();
+    cvector_t mdiag(dim, 0.);
+    mdiag[meas_state] = 1.; // / std::sqrt(meas_prob);
+
+    BaseState::qreg_.apply_diagonal_matrix(qubits, mdiag);
+  }
 }
 
 template <class statevec_t>

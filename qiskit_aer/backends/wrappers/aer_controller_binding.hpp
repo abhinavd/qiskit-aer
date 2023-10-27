@@ -509,7 +509,8 @@ void bind_aer_controller(MODULE m) {
             write_value(80, config.shot_branching_enable),
             write_value(81, config.shot_branching_sampling_enable),
             write_value(82, config.target_gpus),
-            write_value(83, config.runtime_parameter_bind_enable));
+            write_value(83, config.runtime_parameter_bind_enable)
+            );
       },
       [](py::tuple t) {
         AER::Config config;

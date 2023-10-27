@@ -174,6 +174,7 @@ void bind_aer_circuit(MODULE m) {
   aer_circuit.def("roerror", &Circuit::roerror);
   aer_circuit.def("multiplexer", &Circuit::multiplexer);
   aer_circuit.def("kraus", &Circuit::kraus);
+  aer_circuit.def("projection", &Circuit::projection);
   aer_circuit.def("superop", &Circuit::superop);
   aer_circuit.def("save_state", &Circuit::save_state);
   aer_circuit.def("save_amplitudes", &Circuit::save_amplitudes);

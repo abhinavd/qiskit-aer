@@ -655,7 +655,7 @@ class NoiseModel:
             # If the instruction is in the default basis gates for the
             # AerSimulator we add it to the basis gates.
             if name in BASIS_GATES["automatic"]:
-                if name not in ["measure", "reset", "initialize", "kraus", "superop", "roerror"]:
+                if name not in ["measure", "reset", "initialize", "kraus", "superop", "roerror", "projection"]:
                     self._basis_gates.add(name)
 
     def add_all_qubit_quantum_error(self, error, instructions, warnings=True):
@@ -985,6 +985,16 @@ class NoiseModel:
                     circ.append(
                         Instruction(
                             name="kraus",
+                            num_qubits=len(dic["qubits"]),
+                            num_clbits=0,
+                            params=dic["params"],
+                        ),
+                        qargs=dic["qubits"],
+                    )
+                elif dic["name"] == "projection":
+                    circ.append(
+                        Instruction(
+                            name="projection",
                             num_qubits=len(dic["qubits"]),
                             num_clbits=0,
                             params=dic["params"],
