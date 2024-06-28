@@ -16,16 +16,20 @@ Aer simulator backend utils
 """
 import os
 from math import log2
-from qiskit.utils import local_hardware_info
+
+import psutil
 from qiskit.circuit import QuantumCircuit
-from qiskit.compiler import assemble
 from qiskit.qobj import QasmQobjInstruction
 from qiskit.result import ProbDistribution
 from qiskit.quantum_info import Clifford
+
 from .compatibility import Statevector, DensityMatrix, StabilizerState, Operator, SuperOp
 
+# pylint: disable=import-error, no-name-in-module, abstract-method
+from .controller_wrappers import aer_initialize_libraries
+
 # Available system memory
-SYSTEM_MEMORY_GB = local_hardware_info()["memory"]
+SYSTEM_MEMORY_GB = psutil.virtual_memory().total / (1024**3)
 
 # Max number of qubits for complex double statevector
 # given available system memory
@@ -34,6 +38,7 @@ MAX_QUBITS_STATEVECTOR = int(log2(SYSTEM_MEMORY_GB * (1024**3) / 16))
 # Location where we put external libraries that will be
 # loaded at runtime by the simulator extension
 LIBRARY_DIR = os.path.dirname(__file__)
+aer_initialize_libraries(LIBRARY_DIR)
 
 LEGACY_METHOD_MAP = {
     "statevector_cpu": ("statevector", "CPU"),
@@ -85,6 +90,10 @@ BASIS_GATES = {
             "rzz",
             "rzx",
             "ccx",
+            "ccz",
+            "crx",
+            "cry",
+            "crz",
             "cswap",
             "mcx",
             "mcy",
@@ -105,13 +114,12 @@ BASIS_GATES = {
             "diagonal",
             "multiplexer",
             "initialize",
-            "delay",
             "pauli",
             "mcx_gray",
             "ecr",
             "reset",
             "projection",
-            "switch_case",
+            "store",
         ]
     ),
     "density_matrix": sorted(
@@ -149,11 +157,8 @@ BASIS_GATES = {
             "ccx",
             "unitary",
             "diagonal",
-            "delay",
             "pauli",
             "ecr",
-            "reset",
-            "switch_case",
         ]
     ),
     "matrix_product_state": sorted(
@@ -182,7 +187,6 @@ BASIS_GATES = {
             "ccx",
             "unitary",
             "roerror",
-            "delay",
             "pauli",
             "r",
             "rx",
@@ -196,8 +200,8 @@ BASIS_GATES = {
             "cswap",
             "diagonal",
             "initialize",
-            "reset",
-            "switch_case",
+            "ecr",
+            "store",
         ]
     ),
     "stabilizer": sorted(
@@ -215,14 +219,10 @@ BASIS_GATES = {
             "cy",
             "cz",
             "swap",
-            "delay",
             "pauli",
-            "reset",
             "ecr",
-            "rx",
-            "ry",
             "rz",
-            "switch_case",
+            "store",
         ]
     ),
     "extended_stabilizer": sorted(
@@ -246,9 +246,10 @@ BASIS_GATES = {
             "p",
             "ccx",
             "ccz",
-            "delay",
             "pauli",
-            "reset",
+            "ecr",
+            "rz",
+            "store",
         ]
     ),
     "unitary": sorted(
@@ -288,7 +289,11 @@ BASIS_GATES = {
             "rzz",
             "rzx",
             "ccx",
+            "ccz",
             "cswap",
+            "crx",
+            "cry",
+            "crz",
             "mcx",
             "mcy",
             "mcz",
@@ -307,10 +312,9 @@ BASIS_GATES = {
             "unitary",
             "diagonal",
             "multiplexer",
-            "delay",
             "pauli",
             "ecr",
-            "reset",
+            "store",
         ]
     ),
     "superop": sorted(
@@ -348,9 +352,8 @@ BASIS_GATES = {
             "ccx",
             "unitary",
             "diagonal",
-            "delay",
             "pauli",
-            "reset",
+            "store",
         ]
     ),
     "tensor_network": sorted(
@@ -390,7 +393,11 @@ BASIS_GATES = {
             "rzz",
             "rzx",
             "ccx",
+            "ccz",
             "cswap",
+            "crx",
+            "cry",
+            "crz",
             "mcx",
             "mcy",
             "mcz",
@@ -410,10 +417,10 @@ BASIS_GATES = {
             "diagonal",
             "multiplexer",
             "initialize",
-            "delay",
             "pauli",
             "mcx_gray",
-            "reset",
+            "ecr",
+            "store",
         ]
     ),
 }
@@ -452,40 +459,23 @@ def cpp_execute_circuits(controller, aer_circuits, noise_model, config):
     return controller.execute(aer_circuits, noise_model, config)
 
 
-def available_methods(controller, methods, devices):
-    """Check available simulation methods by running a dummy circuit."""
-    # Test methods are available using the controller
-    dummy_circ = QuantumCircuit(1)
-    dummy_circ.id(0)
+def available_methods(methods, devices):
+    """Check available simulation methods"""
 
     valid_methods = []
-    for device in devices:
-        for method in methods:
-            if method not in valid_methods:
-                qobj = assemble(
-                    dummy_circ, optimization_level=0, shots=1, method=method, device=device
-                )
-                result = cpp_execute_qobj(controller, qobj)
-                if result.get("success", False):
-                    valid_methods.append(method)
+    for method in methods:
+        if method == "tensor_network":
+            if "GPU" in devices:
+                valid_methods.append(method)
+        else:
+            valid_methods.append(method)
     return tuple(valid_methods)
 
 
-def available_devices(controller, devices):
-    """Check available simulation devices by running a dummy circuit."""
-    # Test methods are available using the controller
-    dummy_circ = QuantumCircuit(1)
-    dummy_circ.id(0)
-
-    valid_devices = []
-    for device in devices:
-        qobj = assemble(
-            dummy_circ, optimization_level=0, shots=1, method="statevector", device=device
-        )
-        result = cpp_execute_qobj(controller, qobj)
-        if result.get("success", False):
-            valid_devices.append(device)
-    return tuple(valid_devices)
+def available_devices(controller):
+    """return available simulation devices"""
+    dev = controller.available_devices()
+    return tuple(dev)
 
 
 def add_final_save_instruction(qobj, state):

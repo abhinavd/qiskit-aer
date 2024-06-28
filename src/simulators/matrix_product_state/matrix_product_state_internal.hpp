@@ -58,7 +58,8 @@ enum Gates {
   csx, // two qubit
   ccx,
   cswap, // three qubit
-  pauli
+  pauli,
+  ecr,
 };
 
 // enum class Direction {RIGHT, LEFT};
@@ -319,6 +320,8 @@ public:
     mps_swap_direction_ = direction;
   }
 
+  static void set_mps_lapack_svd(bool mps_lapack) { mps_lapack_ = mps_lapack; }
+
   static uint_t get_omp_threads() { return omp_threads_; }
   static uint_t get_omp_threshold() { return omp_threshold_; }
   static double get_json_chop_threshold() { return json_chop_threshold_; }
@@ -329,6 +332,8 @@ public:
   static bool get_enable_gate_opt() { return enable_gate_opt_; }
 
   static bool get_mps_log_data() { return mps_log_data_; }
+
+  static bool get_mps_lapack_svd() { return mps_lapack_; }
 
   static MPS_swap_direction get_swap_direction() { return mps_swap_direction_; }
 
@@ -564,6 +569,7 @@ private:
   static std::stringstream logging_str_;
   static bool mps_log_data_;
   static MPS_swap_direction mps_swap_direction_;
+  static bool mps_lapack_;
 };
 
 inline std::ostream &operator<<(std::ostream &out, const rvector_t &vec) {

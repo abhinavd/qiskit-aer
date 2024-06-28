@@ -131,7 +131,6 @@ uint_t cuStateVecChunkContainer<data_t>::Allocate(
   nc = BaseContainer::Allocate(idev, chunk_bits, num_qubits, chunks, buffers,
                                multi_shots, matrix_bit, max_shots,
                                density_matrix);
-
   // initialize custatevevtor handle
   custatevecStatus_t err;
 
@@ -377,9 +376,6 @@ void cuStateVecChunkContainer<data_t>::apply_diagonal_matrix(
     qubits32[i] = qubits[i];
 
   int32_t *pQubits = &qubits32[control_bits];
-  int32_t *pControl = nullptr;
-  if (control_bits > 0)
-    pControl = &qubits32[0];
 
   uint_t bits;
   uint_t nc;
@@ -686,7 +682,6 @@ void cuStateVecChunkContainer<data_t>::apply_rotation(
     const uint_t iChunk, const reg_t &qubits, const Rotation r,
     const double theta, const uint_t gid, const uint_t count) {
   custatevecPauli_t pauli[2];
-  int nPauli = 1;
 
   BaseContainer::set_device();
 
@@ -705,25 +700,21 @@ void cuStateVecChunkContainer<data_t>::apply_rotation(
   case Rotation::xx:
     pauli[0] = CUSTATEVEC_PAULI_X;
     pauli[1] = CUSTATEVEC_PAULI_X;
-    nPauli = 2;
     control_bits--;
     break;
   case Rotation::yy:
     pauli[0] = CUSTATEVEC_PAULI_Y;
     pauli[1] = CUSTATEVEC_PAULI_Y;
-    nPauli = 2;
     control_bits--;
     break;
   case Rotation::zz:
     pauli[0] = CUSTATEVEC_PAULI_Z;
     pauli[1] = CUSTATEVEC_PAULI_Z;
-    nPauli = 2;
     control_bits--;
     break;
   case Rotation::zx:
     pauli[0] = CUSTATEVEC_PAULI_Z;
     pauli[1] = CUSTATEVEC_PAULI_X;
-    nPauli = 2;
     control_bits--;
     break;
   default:
@@ -911,7 +902,7 @@ double cuStateVecChunkContainer<data_t>::expval_pauli(
   const custatevecPauli_t *pauliOperatorsArray[] = {pauliOps};
   const int32_t *basisBitsArray[] = {qubits32};
   double ret[1];
-  const uint32_t nBasisBitsArray[] = {qubits.size()};
+  const uint32_t nBasisBitsArray[] = {(uint32_t)qubits.size()};
 
   custatevecStatus_t err;
   err = custatevecComputeExpectationsOnPauliBasis(

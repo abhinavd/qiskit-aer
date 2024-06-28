@@ -36,6 +36,7 @@ namespace Statevector {
 
 using OpType = Operations::OpType;
 
+// clang-format off
 // OpSet of supported instructions
 const Operations::OpSet StateOpSet(
     // Op types
@@ -65,17 +66,22 @@ const Operations::OpSet StateOpSet(
      OpType::save_statevec_dict,
      OpType::save_densmat,
      OpType::jump,
-     OpType::mark},
+     OpType::mark,
+     OpType::store},
+
     // Gates
-    {"u1",   "u2",    "u3",     "u",     "U",     "CX",       "cx",
-     "cz",   "cy",    "cp",     "cu1",   "cu2",   "cu3",      "swap",
-     "id",   "p",     "x",      "y",     "z",     "h",        "s",
-     "sdg",  "t",     "tdg",    "r",     "rx",    "ry",       "rz",
-     "rxx",  "ryy",   "rzz",    "rzx",   "ccx",   "cswap",    "mcx",
-     "mcy",  "mcz",   "mcu1",   "mcu2",  "mcu3",  "mcswap",   "mcphase",
-     "mcr",  "mcrx",  "mcry",   "mcrz",  "sx",    "sxdg",     "csx",
-     "mcsx", "csxdg", "mcsxdg", "delay", "pauli", "mcx_gray", "cu",
-     "mcu",  "mcp",   "ecr"});
+    {
+        "u1",   "u2",    "u3",     "u",       "U",     "CX",       "cx",
+        "cz",   "cy",    "cp",     "cu1",     "cu2",   "cu3",      "swap",
+        "id",   "p",     "x",      "y",       "z",     "h",        "s",
+        "sdg",  "t",     "tdg",    "r",       "rx",    "ry",       "rz",
+        "rxx",  "ryy",   "rzz",    "rzx",     "ccx",   "ccz",      "cswap",
+        "mcx",  "mcy",   "mcz",    "mcu1",    "mcu2",  "mcu3",     "mcswap",
+        "mcr",  "mcrx",  "mcry",   "mcrz",    "sx",    "sxdg",     "csx",
+        "mcsx", "csxdg", "mcsxdg", "delay",   "pauli", "mcx_gray", "cu",
+        "mcu",  "mcp",   "ecr",    "mcphase", "crx",   "cry",      "crz",
+    });
+// clang-format on
 
 // Allowed gates enum class
 enum class Gates {
@@ -154,8 +160,8 @@ public:
 
   // Sample n-measurement outcomes without applying the measure operation
   // to the system state
-  virtual std::vector<reg_t> sample_measure(const reg_t &qubits, uint_t shots,
-                                            RngEngine &rng) override;
+  std::vector<SampleVector> sample_measure(const reg_t &qubits, uint_t shots,
+                                           RngEngine &rng) override;
 
   // Helper function for computing expectation value
   virtual double expval_pauli(const reg_t &qubits,
@@ -174,7 +180,7 @@ public:
   // Apply instructions
   //-----------------------------------------------------------------------
 
-  // Applies a sypported Gate operation to the state class.
+  // Applies a supported Gate operation to the state class.
   // If the input is not in allowed_gates an exeption will be raised.
   void apply_gate(const Operations::Op &op);
 
@@ -376,8 +382,12 @@ const stringmap_t<Gates> State<statevec_t>::gateset_(
      {"csx", Gates::mcsx},     // Controlled-Sqrt(X) gate
      {"csxdg", Gates::mcsxdg}, // Controlled-Sqrt(X)dg gate
      {"ecr", Gates::ecr},      // ECR Gate
+     {"crx", Gates::mcrx},     // Controlled X-rotation gate
+     {"cry", Gates::mcry},     // Controlled Y-rotation gate
+     {"crz", Gates::mcrz},     // Controlled Z-rotation gate
      /* 3-qubit gates */
      {"ccx", Gates::mcx},      // Controlled-CX gate (Toffoli)
+     {"ccz", Gates::mcz},      // Controlled-CZ gate
      {"cswap", Gates::mcswap}, // Controlled SWAP gate (Fredkin)
      /* Multi-qubit controlled gates */
      {"mcx", Gates::mcx},       // Multi-controlled-X gate
@@ -409,7 +419,6 @@ const stringmap_t<Gates> State<statevec_t>::gateset_(
 
 template <class statevec_t>
 void State<statevec_t>::initialize_qreg(uint_t num_qubits) {
-  int_t i;
   initialize_omp();
 
   BaseState::qreg_.set_num_qubits(num_qubits);
@@ -433,8 +442,6 @@ void State<statevec_t>::initialize_statevector(uint_t num_qubits,
 
 template <class statevec_t>
 void State<statevec_t>::initialize_omp() {
-  uint_t i;
-
   BaseState::qreg_.set_omp_threshold(omp_qubit_threshold_);
   if (BaseState::threads_ > 0) // set allowed OMP threads in qubitvector
     BaseState::qreg_.set_omp_threads(BaseState::threads_);
@@ -449,6 +456,9 @@ bool State<statevec_t>::allocate(uint_t num_qubits, uint_t block_bits,
     BaseState::qreg_.set_max_sampling_shots(BaseState::max_sampling_shots_);
 
   BaseState::qreg_.set_target_gpus(BaseState::target_gpus_);
+#ifdef AER_CUSTATEVEC
+  BaseState::qreg_.cuStateVec_enable(BaseState::cuStateVec_enable_);
+#endif
   BaseState::qreg_.chunk_setup(block_bits, num_qubits, 0, 1);
 
   return true;
@@ -711,7 +721,7 @@ cmatrix_t State<statevec_t>::vec2density(const reg_t &qubits, const T &vec) {
   cmatrix_t densmat(DIM, DIM);
   if ((N == BaseState::qreg_.num_qubits()) && (qubits == qubits_sorted)) {
     const int_t mask = QV::MASKS[N];
-#pragma omp parallel for if (2 * N > omp_qubit_threshold_ &&                   \
+#pragma omp parallel for if (2 * N > (size_t)omp_qubit_threshold_ &&           \
                              BaseState::threads_ > 1)                          \
     num_threads(BaseState::threads_)
     for (int_t rowcol = 0; rowcol < int_t(DIM * DIM); ++rowcol) {
@@ -760,7 +770,7 @@ void State<statevec_t>::apply_gate(const Operations::Op &op) {
     }
     if (qubits_out.size() > 0) {
       uint_t mask = 0;
-      for (int i = 0; i < qubits_out.size(); i++) {
+      for (uint_t i = 0; i < qubits_out.size(); i++) {
         mask |= (1ull << (qubits_out[i] - BaseState::qreg_.num_qubits()));
       }
       if ((BaseState::qreg_.chunk_index() & mask) == mask) {
@@ -1039,10 +1049,10 @@ void State<statevec_t>::measure_reset_update(const std::vector<uint_t> &qubits,
 }
 
 template <class statevec_t>
-std::vector<reg_t> State<statevec_t>::sample_measure(const reg_t &qubits,
-                                                     uint_t shots,
-                                                     RngEngine &rng) {
-  int_t i, j;
+std::vector<SampleVector> State<statevec_t>::sample_measure(const reg_t &qubits,
+                                                            uint_t shots,
+                                                            RngEngine &rng) {
+  uint_t i;
   // Generate flat register for storing
   std::vector<double> rnds;
   rnds.reserve(shots);
@@ -1053,18 +1063,25 @@ std::vector<reg_t> State<statevec_t>::sample_measure(const reg_t &qubits,
 
   allbit_samples = BaseState::qreg_.sample_measure(rnds);
 
-  // Convert to reg_t format
-  std::vector<reg_t> all_samples;
-  all_samples.reserve(shots);
-  for (int_t val : allbit_samples) {
-    reg_t allbit_sample = Utils::int2reg(val, 2, BaseState::qreg_.num_qubits());
-    reg_t sample;
-    sample.reserve(qubits.size());
-    for (uint_t qubit : qubits) {
-      sample.push_back(allbit_sample[qubit]);
+  // Convert to SampleVector format
+  int_t npar = BaseState::threads_;
+  if (npar > shots)
+    npar = shots;
+  std::vector<SampleVector> all_samples(shots, SampleVector(qubits.size()));
+
+  auto convert_to_bit_lambda = [this, &allbit_samples, &all_samples, shots,
+                                qubits, npar](int_t k) {
+    uint_t ishot, iend;
+    ishot = shots * k / npar;
+    iend = shots * (k + 1) / npar;
+    for (; ishot < iend; ishot++) {
+      SampleVector allbit_sample;
+      allbit_sample.from_uint(allbit_samples[ishot], qubits.size());
+      all_samples[ishot].map(allbit_sample, qubits);
     }
-    all_samples.push_back(sample);
-  }
+  };
+  Utils::apply_omp_parallel_for((npar > 1), 0, npar, convert_to_bit_lambda,
+                                npar);
 
   return all_samples;
 }
@@ -1096,10 +1113,22 @@ void State<statevec_t>::measure_update_without_normalisation(const std::vector<u
 
 template <class statevec_t>
 void State<statevec_t>::apply_initialize(const reg_t &qubits,
-                                         const cvector_t &params,
+                                         const cvector_t &params_in,
                                          RngEngine &rng) {
   auto sorted_qubits = qubits;
   std::sort(sorted_qubits.begin(), sorted_qubits.end());
+  // apply global phase here
+  cvector_t tmp;
+  if (BaseState::has_global_phase_) {
+    tmp.resize(params_in.size());
+    auto apply_global_phase = [&tmp, &params_in, this](int_t i) {
+      tmp[i] = params_in[i] * BaseState::global_phase_;
+    };
+    Utils::apply_omp_parallel_for(
+        (qubits.size() > (uint_t)omp_qubit_threshold_), 0, params_in.size(),
+        apply_global_phase, BaseState::threads_);
+  }
+  const cvector_t &params = tmp.empty() ? params_in : tmp;
   if (qubits.size() == BaseState::qreg_.num_qubits()) {
     // If qubits is all ordered qubits in the statevector
     // we can just initialize the whole state directly

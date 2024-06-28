@@ -47,38 +47,25 @@ static uint_t instruction_number = 0;
 
 using OpType = Operations::OpType;
 
+// clang-format off
 // OpSet of supported instructions
 const Operations::OpSet StateOpSet(
-    {OpType::gate,
-     OpType::measure,
-     OpType::reset,
-     OpType::initialize,
-     OpType::barrier,
-     OpType::bfunc,
-     OpType::roerror,
-     OpType::qerror_loc,
-     OpType::matrix,
-     OpType::diagonal_matrix,
-     OpType::kraus,
-     OpType::save_expval,
-     OpType::save_expval_var,
-     OpType::save_densmat,
-     OpType::save_statevec,
-     OpType::save_probs,
-     OpType::save_probs_ket,
-     OpType::save_amps,
-     OpType::save_amps_sq,
-     OpType::save_mps,
-     OpType::save_state,
-     OpType::set_mps,
-     OpType::set_statevec,
-     OpType::jump,
-     OpType::mark},
+    // Op types
+    {OpType::gate,            OpType::measure,        OpType::reset,
+     OpType::initialize,      OpType::barrier,        OpType::bfunc,
+     OpType::roerror,         OpType::qerror_loc,     OpType::matrix,
+     OpType::diagonal_matrix, OpType::kraus,          OpType::save_expval,
+     OpType::save_expval_var, OpType::save_densmat,   OpType::save_statevec,
+     OpType::save_probs,      OpType::save_probs_ket, OpType::save_amps,
+     OpType::save_amps_sq,    OpType::save_mps,       OpType::save_state,
+     OpType::set_mps,         OpType::set_statevec,   OpType::jump,
+     OpType::mark,            OpType::store},
     // Gates
-    {"id",  "x",    "y",   "z",   "s",     "sdg",   "h",    "t",  "tdg", "p",
-     "u1",  "u2",   "u3",  "u",   "U",     "CX",    "cx",   "cy", "cz",  "cp",
-     "cu1", "swap", "ccx", "sx",  "sxdg",  "r",     "rx",   "ry", "rz",  "rxx",
-     "ryy", "rzz",  "rzx", "csx", "delay", "cswap", "pauli"});
+    {"id",  "x",    "y",   "z",   "s",     "sdg",   "h",     "t",  "tdg", "p",
+     "u1",  "u2",   "u3",  "u",   "U",     "CX",    "cx",    "cy", "cz",  "cp",
+     "cu1", "swap", "ccx", "sx",  "sxdg",  "r",     "rx",    "ry", "rz",  "rxx",
+     "ryy", "rzz",  "rzx", "csx", "delay", "cswap", "pauli", "ecr"});
+// clang-format on
 
 //=========================================================================
 // Matrix Product State subclass
@@ -131,16 +118,16 @@ public:
 
   // Sample n-measurement outcomes without applying the measure operation
   // to the system state
-  virtual std::vector<reg_t> sample_measure(const reg_t &qubits, uint_t shots,
-                                            RngEngine &rng) override;
+  virtual std::vector<SampleVector>
+  sample_measure(const reg_t &qubits, uint_t shots, RngEngine &rng) override;
 
   // Computes sample_measure by copying the MPS to a temporary structure, and
   // applying a measurement on the temporary MPS. This is done for every shot,
   // so is not efficient for a large number of shots
-  std::vector<reg_t> sample_measure_using_apply_measure(const reg_t &qubits,
-                                                        uint_t shots,
-                                                        RngEngine &rng);
-  std::vector<reg_t> sample_measure_all(uint_t shots, RngEngine &rng);
+  std::vector<SampleVector>
+  sample_measure_using_apply_measure(const reg_t &qubits, uint_t shots,
+                                     RngEngine &rng);
+  std::vector<SampleVector> sample_measure_all(uint_t shots, RngEngine &rng);
   //-----------------------------------------------------------------------
   // Additional methods
   //-----------------------------------------------------------------------
@@ -296,6 +283,7 @@ const stringmap_t<Gates>
                      {"ryy", Gates::ryy},   // Pauli-YY rotation gate
                      {"rzz", Gates::rzz},   // Pauli-ZZ rotation gate
                      {"rzx", Gates::rzx},   // Pauli-ZX rotation gate
+                     {"ecr", Gates::ecr},   // ECR Gate
                      /* Three-qubit gates */
                      {"ccx", Gates::ccx}, // Controlled-CX gate (Toffoli)
                      {"cswap", Gates::cswap},
@@ -312,6 +300,10 @@ const stringmap_t<Gates>
 
 void State::initialize_qreg(uint_t num_qubits = 0) {
   qreg_.initialize(num_qubits);
+  if (BaseState::has_global_phase_) {
+    BaseState::qreg_.apply_diagonal_matrix(
+        {0}, {BaseState::global_phase_, BaseState::global_phase_});
+  }
 }
 
 void State::initialize_omp() {
@@ -324,7 +316,7 @@ size_t State::required_memory_mb(uint_t num_qubits,
                                  const std::vector<Operations::Op> &ops) const {
   if (num_qubits > 1) {
     MPSSizeEstimator est(num_qubits);
-    uint_t size = est.estimate(ops);
+    uint_t size = est.estimate(ops, gateset_);
     return (size >> 20);
   }
   return 0;
@@ -365,6 +357,9 @@ void State::set_config(const Config &config) {
     MPS::set_mps_swap_direction(MPS_swap_direction::SWAP_RIGHT);
   else
     MPS::set_mps_swap_direction(MPS_swap_direction::SWAP_LEFT);
+
+  // Set LAPACK SVD
+  MPS::set_mps_lapack_svd(config.mps_lapack);
 }
 
 void State::add_metadata(ExperimentResult &result) const {
@@ -376,6 +371,7 @@ void State::add_metadata(ExperimentResult &result) const {
                       "matrix_product_state_sample_measure_algorithm");
   if (MPS::get_mps_log_data())
     result.metadata.add("{" + MPS::output_log() + "}", "MPS_log_data");
+  result.metadata.add(MPS::get_mps_lapack_svd(), "matrix_product_state_lapack");
 }
 
 void State::output_bond_dimensions(const Operations::Op &op) const {
@@ -665,6 +661,9 @@ void State::apply_gate(const Operations::Op &op) {
   case Gates::pauli:
     apply_pauli(op.qubits, op.string_params[0]);
     break;
+  case Gates::ecr:
+    qreg_.apply_matrix(op.qubits, Linalg::Matrix::ECR);
+    break;
   default:
     // We shouldn't reach here unless there is a bug in gateset
     throw std::invalid_argument(
@@ -721,14 +720,25 @@ void State::apply_kraus(const reg_t &qubits,
 
 void State::apply_initialize(const reg_t &qubits, const cvector_t &params,
                              RngEngine &rng) {
-  qreg_.apply_initialize(qubits, params, rng);
+  // apply global phase here
+  if (BaseState::has_global_phase_) {
+    cvector_t tmp(params.size());
+    auto apply_global_phase = [&tmp, params, this](int_t i) {
+      tmp[i] = params[i] * BaseState::global_phase_;
+    };
+    Utils::apply_omp_parallel_for((qubits.size() > 14), 0, params.size(),
+                                  apply_global_phase, BaseState::threads_);
+    qreg_.apply_initialize(qubits, tmp, rng);
+  } else {
+    qreg_.apply_initialize(qubits, params, rng);
+  }
 }
 
 void State::apply_measure(const reg_t &qubits, const reg_t &cmemory,
                           const reg_t &cregister, RngEngine &rng) {
   rvector_t rands;
   rands.reserve(qubits.size());
-  for (int_t i = 0; i < qubits.size(); ++i)
+  for (uint_t i = 0; i < qubits.size(); ++i)
     rands.push_back(rng.rand(0., 1.));
   reg_t outcome = qreg_.apply_measure(qubits, rands);
   creg().store_measure(outcome, cmemory, cregister);
@@ -740,8 +750,8 @@ rvector_t State::measure_probs(const reg_t &qubits) const {
   return probvector;
 }
 
-std::vector<reg_t> State::sample_measure(const reg_t &qubits, uint_t shots,
-                                         RngEngine &rng) {
+std::vector<SampleVector> State::sample_measure(const reg_t &qubits,
+                                                uint_t shots, RngEngine &rng) {
   // There are two alternative algorithms for sample measure
   // We choose the one that is optimal relative to the total number
   // of qubits,and the number of shots.
@@ -755,17 +765,17 @@ std::vector<reg_t> State::sample_measure(const reg_t &qubits, uint_t shots,
   return sample_measure_using_apply_measure(qubits, shots, rng);
 }
 
-std::vector<reg_t>
+std::vector<SampleVector>
 State::sample_measure_using_apply_measure(const reg_t &qubits, uint_t shots,
                                           RngEngine &rng) {
-  std::vector<reg_t> all_samples;
+  std::vector<SampleVector> all_samples;
   all_samples.resize(shots);
   std::vector<rvector_t> rnds_list;
   rnds_list.reserve(shots);
-  for (int_t i = 0; i < shots; ++i) {
+  for (uint_t i = 0; i < shots; ++i) {
     rvector_t rands;
     rands.reserve(qubits.size());
-    for (int_t j = 0; j < qubits.size(); ++j)
+    for (uint_t j = 0; j < qubits.size(); ++j)
       rands.push_back(rng.rand(0., 1.));
     rnds_list.push_back(rands);
   }
@@ -778,19 +788,21 @@ State::sample_measure_using_apply_measure(const reg_t &qubits, uint_t shots,
     for (int_t i = 0; i < static_cast<int_t>(shots); i++) {
       temp.initialize(qreg_);
       auto single_result = temp.apply_measure_internal(qubits, rnds_list[i]);
-      all_samples[i] = single_result;
+      all_samples[i].from_vector(single_result);
     }
   }
   return all_samples;
 }
 
-std::vector<reg_t> State::sample_measure_all(uint_t shots, RngEngine &rng) {
-  std::vector<reg_t> all_samples;
+std::vector<SampleVector> State::sample_measure_all(uint_t shots,
+                                                    RngEngine &rng) {
+  std::vector<SampleVector> all_samples;
   all_samples.resize(shots);
 
-  for (uint_t i = 0; i < shots; i++) {
+#pragma omp parallel for if (getenv("PRL_PROB_MEAS"))
+  for (int_t i = 0; i < static_cast<int_t>(shots); i++) {
     auto single_result = qreg_.sample_measure(shots, rng);
-    all_samples[i] = single_result;
+    all_samples[i].from_vector(single_result);
   }
   return all_samples;
 }

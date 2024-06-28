@@ -3,7 +3,7 @@
 First read the overall project contributing guidelines. These are all
 included in the Qiskit documentation:
 
-https://qiskit.org/documentation/contributing_to_qiskit.html
+https://github.com/Qiskit/qiskit/blob/main/CONTRIBUTING.md
 
 ## Contributing to Aer
 
@@ -965,6 +965,16 @@ These are the flags:
     Values: An absolute path.
     Default: No value.
     Example: ``python ./setup.py bdist_wheel -- -DAER_BLAS_LIB_PATH=/path/to/look/for/blas/``
+
+* USE_BUNDLED_BLAS_WIN
+
+    Tells CMake to use the bundled OpenBLAS library vendored into the source code when building on Windows.
+    When this option is set to `False`, CMake will use its standard method to search for the BLAS library aginst which to link instead of using the vendored version.
+    The `AER_BLAS_LIB_PATH` option takes precedence over this option.
+
+    Values: True|False
+    Default: True
+    Example: ``python ./setup.py bdist_wheel -- -DUSE_BUNDLED_BLAS_WIN=FALSE``
 
 * BUILD_TESTS
 

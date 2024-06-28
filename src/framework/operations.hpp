@@ -52,11 +52,13 @@ enum class BinaryOp {
   GreaterEqual
 };
 
+bool isBoolBinaryOp(const BinaryOp binary_op);
 bool isBoolBinaryOp(const BinaryOp binary_op) {
   return binary_op != BinaryOp::BitAnd && binary_op != BinaryOp::BitOr &&
          binary_op != BinaryOp::BitXor;
 }
 
+uint_t truncate(const uint_t val, const size_t width);
 uint_t truncate(const uint_t val, const size_t width) {
   size_t shift = 64 - width;
   return (val << shift) >> shift;
@@ -68,8 +70,8 @@ enum class ValueType { Bool, Uint };
 
 class ScalarType {
 public:
-  ScalarType(const ValueType type_, const size_t width_)
-      : type(type_), width(width_) {}
+  ScalarType(const ValueType _type, const size_t width_)
+      : type(_type), width(width_) {}
 
 public:
   const ValueType type;
@@ -97,8 +99,8 @@ public:
 
 class CExpr {
 public:
-  CExpr(const CExprType expr_type_, const std::shared_ptr<ScalarType> type_)
-      : expr_type(expr_type_), type(type_) {}
+  CExpr(const CExprType _expr_type, const std::shared_ptr<ScalarType> _type)
+      : expr_type(_expr_type), type(_type) {}
   virtual bool eval_bool(const std::string &memory) { return false; };
   virtual uint_t eval_uint(const std::string &memory) { return 0ul; };
 
@@ -109,9 +111,9 @@ public:
 
 class CastExpr : public CExpr {
 public:
-  CastExpr(std::shared_ptr<ScalarType> type,
+  CastExpr(std::shared_ptr<ScalarType> _type,
            const std::shared_ptr<CExpr> operand_)
-      : CExpr(CExprType::Cast, type), operand(operand_) {}
+      : CExpr(CExprType::Cast, _type), operand(operand_) {}
 
   virtual bool eval_bool(const std::string &memory) {
     if (type->type != ValueType::Bool)
@@ -143,9 +145,9 @@ public:
 
 class VarExpr : public CExpr {
 public:
-  VarExpr(std::shared_ptr<ScalarType> type,
-          const std::vector<uint_t> &cbit_idxs)
-      : CExpr(CExprType::Var, type), cbit_idxs(cbit_idxs) {}
+  VarExpr(std::shared_ptr<ScalarType> _type,
+          const std::vector<uint_t> &_cbit_idxs)
+      : CExpr(CExprType::Var, _type), cbit_idxs(_cbit_idxs) {}
 
   virtual bool eval_bool(const std::string &memory) {
     if (type->type != ValueType::Bool)
@@ -164,7 +166,6 @@ public:
 private:
   uint_t eval_uint_(const std::string &memory) {
     uint_t val = 0ul;
-    const uint_t memory_size = memory.size();
     uint_t shift = 0;
     for (const uint_t cbit_idx : cbit_idxs) {
       if (memory.size() <= cbit_idx)
@@ -182,7 +183,8 @@ public:
 
 class ValueExpr : public CExpr {
 public:
-  ValueExpr(std::shared_ptr<ScalarType> type) : CExpr(CExprType::Value, type) {}
+  ValueExpr(std::shared_ptr<ScalarType> _type)
+      : CExpr(CExprType::Value, _type) {}
 };
 
 class UintValue : public ValueExpr {
@@ -220,30 +222,28 @@ public:
 class UnaryExpr : public CExpr {
 public:
   UnaryExpr(const UnaryOp op_, const std::shared_ptr<CExpr> operand_)
-      : CExpr(CExprType::Unary, operand_->type), op(op_), operand(operand_) {
-    if (op == UnaryOp::LogicNot && operand_->type->type != ValueType::Bool)
-      throw std::invalid_argument(
-          R"(LogicNot unary expression must has Bool expression as its operand.)");
-
-    if (op == UnaryOp::BitNot && operand_->type->type != ValueType::Uint)
-      throw std::invalid_argument(
-          R"(BitNot unary expression must has Uint expression as its operand.)");
-  }
+      : CExpr(CExprType::Unary, operand_->type), op(op_), operand(operand_) {}
 
   virtual bool eval_bool(const std::string &memory) {
-    if (op == UnaryOp::BitNot)
-      throw std::invalid_argument(
-          R"(eval_bool is called for BitNot unary expression.)");
-    else // LogicNot
-      return !operand->eval_bool(memory);
+    if (op == UnaryOp::LogicNot || op == UnaryOp::BitNot) {
+      if (operand->type->type == ValueType::Bool) {
+        return !operand->eval_bool(memory);
+      } else if (operand->type->type == ValueType::Uint) {
+        return truncate(~operand->eval_uint(memory), type->width) != 0Ul;
+      }
+    }
+    throw std::invalid_argument(R"(should not reach here.)");
   }
 
   virtual uint_t eval_uint(const std::string &memory) {
-    if (op == UnaryOp::BitNot)
-      return truncate(~operand->eval_uint(memory), type->width);
-    else // LogicNot
-      throw std::invalid_argument(
-          R"(eval_uint is called for LogicNot unary expression.)");
+    if (op == UnaryOp::LogicNot || op == UnaryOp::BitNot) {
+      if (operand->type->type == ValueType::Bool) {
+        return operand->eval_bool(memory) ? 1UL : 0UL;
+      } else if (operand->type->type == ValueType::Uint) {
+        return truncate(~operand->eval_uint(memory), type->width);
+      }
+    }
+    throw std::invalid_argument(R"(should not reach here.)");
   }
 
 public:
@@ -268,9 +268,6 @@ public:
     case BinaryOp::BitAnd:
     case BinaryOp::BitOr:
     case BinaryOp::BitXor:
-      if (left->type->type != ValueType::Uint)
-        throw std::invalid_argument(
-            R"(bit operation allows only for uint expressions.)");
       break;
     case BinaryOp::LogicAnd:
     case BinaryOp::LogicOr:
@@ -297,10 +294,20 @@ public:
   virtual bool eval_bool(const std::string &memory) {
     switch (op) {
     case BinaryOp::BitAnd:
+      if (left->type->type == ValueType::Uint)
+        return eval_uint(memory) != 0;
+      else
+        return left->eval_bool(memory) && right->eval_bool(memory);
     case BinaryOp::BitOr:
+      if (left->type->type == ValueType::Uint)
+        return eval_uint(memory) != 0;
+      else
+        return left->eval_bool(memory) || right->eval_bool(memory);
     case BinaryOp::BitXor:
-      throw std::invalid_argument(
-          R"(eval_bool is called for Bit* binary expression.)");
+      if (left->type->type == ValueType::Uint)
+        return eval_uint(memory) != 0;
+      else
+        return left->eval_bool(memory) ^ right->eval_bool(memory);
     case BinaryOp::LogicAnd:
       return left->eval_bool(memory) && right->eval_bool(memory);
     case BinaryOp::LogicOr:
@@ -377,7 +384,6 @@ enum class OpType {
   superop,
   roerror,
   noise_switch,
-  sample_noise,
   // Save instructions
   save_state,
   save_expval,
@@ -405,7 +411,8 @@ enum class OpType {
   jump,
   mark,
   unary_expr,
-  binary_expr
+  binary_expr,
+  store
 };
 
 enum class DataSubType {
@@ -529,9 +536,6 @@ inline std::ostream &operator<<(std::ostream &stream, const OpType &type) {
   case OpType::qerror_loc:
     stream << "qerror_loc";
     break;
-  case OpType::sample_noise:
-    stream << "sample_noise";
-    break;
   case OpType::noise_switch:
     stream << "noise_switch";
     break;
@@ -555,6 +559,9 @@ inline std::ostream &operator<<(std::ostream &stream, const OpType &type) {
     break;
   case OpType::binary_expr:
     stream << "binary_expr";
+    break;
+  case OpType::store:
+    stream << "store";
     break;
   default:
     stream << "unknown";
@@ -611,11 +618,14 @@ struct Op {
       string_params; // used for label, control-flow, and boolean functions
 
   // Conditional Operations
-  bool conditional = false; // is gate conditional gate
-  uint_t conditional_reg; // (opt) the (single) register location to look up for
-                          // conditional
-  BinaryOp binary_op;     // (opt) boolean function relation
-  std::shared_ptr<CExpr> expr; // (opt) classical expression
+  // is gate conditional gate
+  bool conditional = false;
+  // (opt) the (single) register location to look up for conditional
+  uint_t conditional_reg = 0;
+  // (opt) boolean function relation
+  BinaryOp binary_op;
+  // (opt) classical expression
+  std::shared_ptr<CExpr> expr = nullptr;
 
   // Measurement
   reg_t memory;    // (opt) register operation it acts on (measure)
@@ -636,6 +646,9 @@ struct Op {
 
   // Save
   DataSubType save_type = DataSubType::single;
+
+  // runtime noise sampling
+  bool sample_noise = false;
 
   // runtime parameter bind
   bool has_bind_params = false;
@@ -719,27 +732,29 @@ inline void check_duplicate_qubits(const Op &op) {
 }
 
 inline void check_gate_params(const Op &op) {
-  const stringmap_t<std::tuple<int_t, int_t>> param_tables(
-      {{"u1", {1, 1}},       {"u2", {1, 2}},     {"u3", {1, 3}},
-       {"u", {1, 3}},        {"U", {1, 3}},      {"CX", {2, 0}},
-       {"cx", {2, 0}},       {"cz", {2, 0}},     {"cy", {2, 0}},
-       {"cp", {2, 1}},       {"cu1", {2, 1}},    {"cu2", {2, 2}},
-       {"cu3", {2, 3}},      {"swap", {2, 0}},   {"id", {0, 0}},
-       {"p", {1, 1}},        {"x", {1, 0}},      {"y", {1, 0}},
-       {"z", {1, 0}},        {"h", {1, 0}},      {"s", {1, 0}},
-       {"sdg", {1, 0}},      {"t", {1, 0}},      {"tdg", {1, 0}},
-       {"r", {1, 2}},        {"rx", {1, 1}},     {"ry", {1, 1}},
-       {"rz", {1, 1}},       {"rxx", {2, 1}},    {"ryy", {2, 1}},
-       {"rzz", {2, 1}},      {"rzx", {2, 1}},    {"ccx", {3, 0}},
-       {"cswap", {3, 0}},    {"mcx", {1, 0}},    {"mcy", {1, 0}},
-       {"mcz", {1, 0}},      {"mcu1", {1, 1}},   {"mcu2", {1, 2}},
-       {"mcu3", {1, 3}},     {"mcswap", {2, 0}}, {"mcphase", {1, 1}},
-       {"mcr", {1, 1}},      {"mcrx", {1, 1}},   {"mcry", {1, 1}},
-       {"mcrz", {1, 1}},     {"sx", {1, 0}},     {"sxdg", {1, 0}},
-       {"csx", {2, 0}},      {"mcsx", {1, 0}},   {"csxdg", {2, 0}},
-       {"mcsxdg", {1, 0}},   {"delay", {1, 0}},  {"pauli", {1, 0}},
-       {"mcx_gray", {1, 0}}, {"cu", {2, 4}},     {"mcu", {1, 4}},
-       {"mcp", {1, 1}},      {"ecr", {2, 0}}});
+  const stringmap_t<std::tuple<int_t, int_t>> param_tables({
+      {"u1", {1, 1}},      {"u2", {1, 2}},       {"u3", {1, 3}},
+      {"u", {1, 3}},       {"U", {1, 3}},        {"CX", {2, 0}},
+      {"cx", {2, 0}},      {"cz", {2, 0}},       {"cy", {2, 0}},
+      {"cp", {2, 1}},      {"cu1", {2, 1}},      {"cu2", {2, 2}},
+      {"cu3", {2, 3}},     {"swap", {2, 0}},     {"id", {0, 0}},
+      {"p", {1, 1}},       {"x", {1, 0}},        {"y", {1, 0}},
+      {"z", {1, 0}},       {"h", {1, 0}},        {"s", {1, 0}},
+      {"sdg", {1, 0}},     {"t", {1, 0}},        {"tdg", {1, 0}},
+      {"r", {1, 2}},       {"rx", {1, 1}},       {"ry", {1, 1}},
+      {"rz", {1, 1}},      {"rxx", {2, 1}},      {"ryy", {2, 1}},
+      {"rzz", {2, 1}},     {"rzx", {2, 1}},      {"ccx", {3, 0}},
+      {"ccz", {3, 0}},     {"cswap", {3, 0}},    {"mcx", {1, 0}},
+      {"mcy", {1, 0}},     {"mcz", {1, 0}},      {"mcu1", {1, 1}},
+      {"mcu2", {1, 2}},    {"mcu3", {1, 3}},     {"mcswap", {2, 0}},
+      {"mcphase", {1, 1}}, {"mcr", {1, 1}},      {"mcrx", {1, 1}},
+      {"mcry", {1, 1}},    {"mcrz", {1, 1}},     {"sx", {1, 0}},
+      {"sxdg", {1, 0}},    {"csx", {2, 0}},      {"mcsx", {1, 0}},
+      {"csxdg", {2, 0}},   {"mcsxdg", {1, 0}},   {"delay", {1, 0}},
+      {"pauli", {1, 0}},   {"mcx_gray", {1, 0}}, {"cu", {2, 4}},
+      {"mcu", {1, 4}},     {"mcp", {1, 1}},      {"ecr", {2, 0}},
+      {"crx", {1, 1}},     {"cry", {1, 1}},      {"crz", {1, 1}},
+  });
 
   auto it = param_tables.find(op.name);
   if (it == param_tables.end()) {
@@ -951,6 +966,11 @@ Op make_gate(const std::string &name, const reg_t &qubits,
              const std::vector<complex_t> &params,
              const std::vector<std::string> &string_params,
              const int_t conditional, const std::shared_ptr<CExpr> expr,
+             const std::string &label);
+Op make_gate(const std::string &name, const reg_t &qubits,
+             const std::vector<complex_t> &params,
+             const std::vector<std::string> &string_params,
+             const int_t conditional, const std::shared_ptr<CExpr> expr,
              const std::string &label) {
   Op op;
   op.type = OpType::gate;
@@ -1027,6 +1047,15 @@ inline Op make_projection(const reg_t &qubits, const cvector_t &params) {
   op.name = "projection";
   op.qubits = qubits;
   op.params = params;
+
+inline Op make_store(const reg_t &qubits, const reg_t &clbits,
+                     const std::shared_ptr<CExpr> expr) {
+  Op op;
+  op.type = OpType::store;
+  op.name = "store";
+  op.qubits = qubits;
+  op.registers = clbits;
+  op.expr = expr;
   return op;
 }
 
@@ -1320,18 +1349,24 @@ inline Op bind_parameter(const Op &src, const uint_t iparam,
   op.type = src.type;
   op.name = src.name;
   op.qubits = src.qubits;
+  op.regs = src.regs;
+  op.int_params = src.int_params;
+  op.string_params = src.string_params;
   op.conditional = src.conditional;
   op.conditional_reg = src.conditional_reg;
+  op.binary_op = src.binary_op;
+  op.expr = src.expr;
+  op.has_bind_params = false;
 
   if (src.params.size() > 0) {
     uint_t stride = src.params.size() / num_params;
     op.params.resize(stride);
-    for (int_t i = 0; i < stride; i++)
+    for (uint_t i = 0; i < stride; i++)
       op.params[i] = src.params[iparam * stride + i];
   } else if (src.mats.size() > 0) {
     uint_t stride = src.mats.size() / num_params;
     op.mats.resize(stride);
-    for (int_t i = 0; i < stride; i++)
+    for (uint_t i = 0; i < stride; i++)
       op.mats[i] = src.mats[iparam * stride + i];
   }
   return op;
@@ -1545,6 +1580,7 @@ json_t op_to_json(const Op &op) {
   return ret;
 }
 
+void to_json(json_t &js, const OpType &type);
 void to_json(json_t &js, const OpType &type) {
   std::stringstream ss;
   ss << type;

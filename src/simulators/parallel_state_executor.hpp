@@ -136,14 +136,6 @@ protected:
   // Apply a save expectation value instruction
   void apply_save_expval(const Operations::Op &op, ExperimentResult &result);
 
-  // Sample n-measurement outcomes without applying the measure operation
-  // to the system state
-  virtual std::vector<reg_t> sample_measure(const reg_t &qubits, uint_t shots,
-                                            RngEngine &rng) const {
-    std::vector<reg_t> ret;
-    return ret;
-  };
-
   // swap between chunks
   virtual void apply_chunk_swap(const reg_t &qubits);
 
@@ -270,7 +262,7 @@ ParallelStateExecutor<state_t>::transpile_cache_blocking(
 template <class state_t>
 bool ParallelStateExecutor<state_t>::allocate(uint_t num_qubits,
                                               const Config &config) {
-  int_t i;
+  uint_t i;
   Base::num_qubits_ = num_qubits;
   chunk_bits_ = cache_block_qubit_;
 
@@ -312,9 +304,9 @@ bool ParallelStateExecutor<state_t>::allocate(uint_t num_qubits,
 template <class state_t>
 bool ParallelStateExecutor<state_t>::allocate_states(uint_t num_states,
                                                      const Config &config) {
-  int_t i;
+  uint_t i;
   bool init_states = true;
-  uint_t num_states_allocated;
+  uint_t num_states_allocated = num_states;
   // deallocate qregs before reallocation
   if (Base::states_.size() > 0) {
     if (Base::states_.size() == num_states)
@@ -347,6 +339,7 @@ bool ParallelStateExecutor<state_t>::allocate_states(uint_t num_states,
         Base::num_threads_per_group_);
     Base::states_[0].set_num_global_qubits(Base::num_qubits_);
 #ifdef AER_CUSTATEVEC
+    Base::states_[0].enable_cuStateVec(Base::cuStateVec_enable_);
     Base::states_[0].qreg().cuStateVec_enable(Base::cuStateVec_enable_);
 #endif
     Base::states_[0].qreg().set_target_gpus(Base::target_gpus_);
@@ -354,6 +347,9 @@ bool ParallelStateExecutor<state_t>::allocate_states(uint_t num_states,
         squbits, gqubits, Base::global_state_index_, num_states);
     for (i = 1; i < num_states_allocated; i++) {
       Base::states_[i].set_config(config);
+#ifdef AER_CUSTATEVEC
+      Base::states_[i].enable_cuStateVec(Base::cuStateVec_enable_);
+#endif
       Base::states_[i].qreg().chunk_setup(Base::states_[0].qreg(),
                                           Base::global_state_index_ + i);
       Base::states_[i].qreg().set_num_threads_per_group(
@@ -532,7 +528,7 @@ void ParallelStateExecutor<state_t>::run_circuit_shots(
       result.metadata.copy(fusion_result.metadata);
     }
 
-    for (int_t ishot = 0; ishot < circ.shots; ishot++) {
+    for (uint_t ishot = 0; ishot < circ.shots; ishot++) {
       RngEngine rng;
       if (iparam == 0 && ishot == 0)
         rng = init_rng;
@@ -616,7 +612,7 @@ void ParallelStateExecutor<state_t>::measure_sampler(InputIterator first_meas,
 
   // Generate the samples
   auto timer_start = myclock_t::now();
-  auto all_samples = sample_measure(meas_qubits, shots, rng);
+  auto all_samples = this->sample_measure(meas_qubits, shots, rng);
   auto time_taken =
       std::chrono::duration<double>(myclock_t::now() - timer_start).count();
   result.metadata.add(time_taken, "sample_measure_time");
@@ -645,32 +641,74 @@ void ParallelStateExecutor<state_t>::measure_sampler(InputIterator first_meas,
       (memory_map.empty()) ? 0ULL : 1 + memory_map.rbegin()->first;
   uint_t num_registers =
       (register_map.empty()) ? 0ULL : 1 + register_map.rbegin()->first;
-  ClassicalRegister creg;
-  while (!all_samples.empty()) {
-    auto sample = all_samples.back();
-    creg.initialize(num_memory, num_registers);
 
-    // process memory bit measurements
-    for (const auto &pair : memory_map) {
-      creg.store_measure(reg_t({sample[pair.second]}), reg_t({pair.first}),
-                         reg_t());
+  if (roerror_ops.size() > 0) {
+    // can not parallelize for read out error because of rng
+    ClassicalRegister creg;
+    while (!all_samples.empty()) {
+      auto sample = all_samples.back();
+      creg.initialize(num_memory, num_registers);
+
+      // process memory bit measurements
+      for (const auto &pair : memory_map) {
+        creg.store_measure(reg_t({sample[pair.second]}), reg_t({pair.first}),
+                           reg_t());
+      }
+      // process register bit measurements
+      for (const auto &pair : register_map) {
+        creg.store_measure(reg_t({sample[pair.second]}), reg_t(),
+                           reg_t({pair.first}));
+      }
+
+      // process read out errors for memory and registers
+      for (const Operations::Op &roerror : roerror_ops) {
+        creg.apply_roerror(roerror, rng);
+      }
+
+      // Save count data
+      result.save_count_data(creg, Base::save_creg_memory_);
+
+      // pop off processed sample
+      all_samples.pop_back();
     }
-    // process register bit measurements
-    for (const auto &pair : register_map) {
-      creg.store_measure(reg_t({sample[pair.second]}), reg_t(),
-                         reg_t({pair.first}));
+  } else {
+    uint_t npar = Base::parallel_state_update_;
+    if (npar > all_samples.size())
+      npar = all_samples.size();
+
+    std::vector<ExperimentResult> par_results(npar);
+    auto copy_samples_lambda = [this, &par_results, num_memory, num_registers,
+                                memory_map, register_map, npar,
+                                &all_samples](int_t ip) {
+      ClassicalRegister creg;
+      uint_t is, ie;
+      is = all_samples.size() * ip / npar;
+      ie = all_samples.size() * (ip + 1) / npar;
+      for (; is < ie; is++) {
+        uint_t i = all_samples.size() - is - 1;
+        creg.initialize(num_memory, num_registers);
+
+        // process memory bit measurements
+        for (const auto &pair : memory_map) {
+          creg.store_measure(reg_t({(uint_t)all_samples[i][pair.second]}),
+                             reg_t({pair.first}), reg_t());
+        }
+        // process register bit measurements
+        for (const auto &pair : register_map) {
+          creg.store_measure(reg_t({(uint_t)all_samples[i][pair.second]}),
+                             reg_t(), reg_t({pair.first}));
+        }
+
+        // Save count data
+        par_results[ip].save_count_data(creg, Base::save_creg_memory_);
+      }
+    };
+    Utils::apply_omp_parallel_for((npar > 1), 0, npar, copy_samples_lambda,
+                                  npar);
+
+    for (uint_t i = 0; i < npar; i++) {
+      result.combine(std::move(par_results[i]));
     }
-
-    // process read out errors for memory and registers
-    for (const Operations::Op &roerror : roerror_ops) {
-      creg.apply_roerror(roerror, rng);
-    }
-
-    // Save count data
-    result.save_count_data(creg, Base::save_creg_memory_);
-
-    // pop off processed sample
-    all_samples.pop_back();
   }
 }
 
@@ -792,11 +830,11 @@ void ParallelStateExecutor<state_t>::apply_ops_chunks(
       uint_t iOpBegin = iOp + 1;
       if (Base::num_groups_ > 1 && chunk_omp_parallel_) {
 #pragma omp parallel for num_threads(Base::num_groups_)
-        for (int_t ig = 0; ig < Base::num_groups_; ig++)
+        for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++)
           apply_cache_blocking_ops(ig, first + iOpBegin, first + iOpEnd, result,
                                    rng, iparam);
       } else {
-        for (int_t ig = 0; ig < Base::num_groups_; ig++)
+        for (uint_t ig = 0; ig < Base::num_groups_; ig++)
           apply_cache_blocking_ops(ig, first + iOpBegin, first + iOpEnd, result,
                                    rng, iparam);
       }
@@ -810,11 +848,11 @@ void ParallelStateExecutor<state_t>::apply_ops_chunks(
                                final_ops && nOp == iOp + 1)) {
           if (Base::num_groups_ > 1 && chunk_omp_parallel_) {
 #pragma omp parallel for num_threads(Base::num_groups_)
-            for (int_t ig = 0; ig < Base::num_groups_; ig++)
+            for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++)
               apply_cache_blocking_ops(ig, bind_op.cbegin(), bind_op.cend(),
                                        result, rng, iparam);
           } else {
-            for (int_t ig = 0; ig < Base::num_groups_; ig++)
+            for (uint_t ig = 0; ig < Base::num_groups_; ig++)
               apply_cache_blocking_ops(ig, bind_op.cbegin(), bind_op.cend(),
                                        result, rng, iparam);
           }
@@ -824,11 +862,11 @@ void ParallelStateExecutor<state_t>::apply_ops_chunks(
                                final_ops && nOp == iOp + 1)) {
           if (Base::num_groups_ > 1 && chunk_omp_parallel_) {
 #pragma omp parallel for num_threads(Base::num_groups_)
-            for (int_t ig = 0; ig < Base::num_groups_; ig++)
+            for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++)
               apply_cache_blocking_ops(ig, first + iOp, first + iOp + 1, result,
                                        rng, iparam);
           } else {
-            for (int_t ig = 0; ig < Base::num_groups_; ig++)
+            for (uint_t ig = 0; ig < Base::num_groups_; ig++)
               apply_cache_blocking_ops(ig, first + iOp, first + iOp + 1, result,
                                        rng, iparam);
           }
@@ -843,10 +881,10 @@ void ParallelStateExecutor<state_t>::apply_ops_chunks(
 
   if (Base::num_groups_ > 1 && chunk_omp_parallel_) {
 #pragma omp parallel for num_threads(Base::num_groups_)
-    for (int_t ig = 0; ig < Base::num_groups_; ig++)
+    for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++)
       Base::states_[Base::top_state_of_group_[ig]].qreg().synchronize();
   } else {
-    for (int_t ig = 0; ig < Base::num_groups_; ig++)
+    for (uint_t ig = 0; ig < Base::num_groups_; ig++)
       Base::states_[Base::top_state_of_group_[ig]].qreg().synchronize();
   }
 
@@ -881,7 +919,7 @@ void ParallelStateExecutor<state_t>::apply_cache_blocking_ops(
     const int_t iGroup, InputIterator first, InputIterator last,
     ExperimentResult &result, RngEngine &rng, uint_t iparam) {
   // for each chunk in group
-  for (int_t iChunk = Base::top_state_of_group_[iGroup];
+  for (uint_t iChunk = Base::top_state_of_group_[iGroup];
        iChunk < Base::top_state_of_group_[iGroup + 1]; iChunk++) {
     // fecth chunk in cache
     if (Base::states_[iChunk].qreg().fetch_chunk()) {
@@ -901,15 +939,15 @@ void ParallelStateExecutor<state_t>::apply_cache_blocking_ops(
 template <class state_t>
 template <typename list_t>
 void ParallelStateExecutor<state_t>::initialize_from_vector(const list_t &vec) {
-  int_t iChunk;
+  uint_t iChunk;
 
   if (chunk_omp_parallel_ && Base::num_groups_ > 1) {
 #pragma omp parallel for private(iChunk)
-    for (int_t ig = 0; ig < Base::num_groups_; ig++) {
+    for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++) {
       for (iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++) {
         list_t tmp(1ull << (chunk_bits_ * qubit_scale()));
-        for (int_t i = 0; i < (1ull << (chunk_bits_ * qubit_scale())); i++) {
+        for (uint_t i = 0; i < (1ull << (chunk_bits_ * qubit_scale())); i++) {
           tmp[i] = vec[((Base::global_state_index_ + iChunk)
                         << (chunk_bits_ * qubit_scale())) +
                        i];
@@ -920,7 +958,7 @@ void ParallelStateExecutor<state_t>::initialize_from_vector(const list_t &vec) {
   } else {
     for (iChunk = 0; iChunk < Base::num_local_states_; iChunk++) {
       list_t tmp(1ull << (chunk_bits_ * qubit_scale()));
-      for (int_t i = 0; i < (1ull << (chunk_bits_ * qubit_scale())); i++) {
+      for (uint_t i = 0; i < (1ull << (chunk_bits_ * qubit_scale())); i++) {
         tmp[i] = vec[((Base::global_state_index_ + iChunk)
                       << (chunk_bits_ * qubit_scale())) +
                      i];
@@ -933,10 +971,10 @@ void ParallelStateExecutor<state_t>::initialize_from_vector(const list_t &vec) {
 template <class state_t>
 template <typename list_t>
 void ParallelStateExecutor<state_t>::initialize_from_matrix(const list_t &mat) {
-  int_t iChunk;
+  uint_t iChunk;
   if (chunk_omp_parallel_ && Base::num_groups_ > 1) {
 #pragma omp parallel for private(iChunk)
-    for (int_t ig = 0; ig < Base::num_groups_; ig++) {
+    for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++) {
       for (iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++) {
         list_t tmp(1ull << (chunk_bits_), 1ull << (chunk_bits_));
@@ -949,7 +987,7 @@ void ParallelStateExecutor<state_t>::initialize_from_matrix(const list_t &mat) {
             << (chunk_bits_);
 
         // copy part of state for this chunk
-        uint_t i, row, col;
+        uint_t i;
         for (i = 0; i < (1ull << (chunk_bits_ * qubit_scale())); i++) {
           uint_t icol = i & ((1ull << chunk_bits_) - 1);
           uint_t irow = i >> chunk_bits_;
@@ -970,7 +1008,7 @@ void ParallelStateExecutor<state_t>::initialize_from_matrix(const list_t &mat) {
                           << (chunk_bits_);
 
       // copy part of state for this chunk
-      uint_t i, row, col;
+      uint_t i;
       for (i = 0; i < (1ull << (chunk_bits_ * qubit_scale())); i++) {
         uint_t icol = i & ((1ull << chunk_bits_) - 1);
         uint_t irow = i >> chunk_bits_;
@@ -985,7 +1023,7 @@ void ParallelStateExecutor<state_t>::initialize_from_matrix(const list_t &mat) {
 template <class state_t>
 auto ParallelStateExecutor<state_t>::apply_to_matrix(bool copy) {
   // this function is used to collect states over chunks
-  int_t iChunk;
+  uint_t iChunk;
   uint_t size = 1ull << (chunk_bits_ * qubit_scale());
   uint_t mask = (1ull << (chunk_bits_)) - 1;
   uint_t num_threads = Base::states_[0].qreg().get_omp_threads();
@@ -1024,7 +1062,7 @@ auto ParallelStateExecutor<state_t>::apply_to_matrix(bool copy) {
         recv_data(tmp.data(), size, 0, iChunk);
 #endif
 #pragma omp parallel for if (num_threads > 1) num_threads(num_threads)
-      for (i = 0; i < size; i++) {
+      for (i = 0; i < (int_t)size; i++) {
         uint_t irow = i >> (chunk_bits_);
         uint_t icol = i & mask;
         uint_t idx =
@@ -1093,9 +1131,7 @@ void ParallelStateExecutor<state_t>::apply_save_expval(
 
 template <class state_t>
 void ParallelStateExecutor<state_t>::apply_chunk_swap(const reg_t &qubits) {
-  uint_t nLarge = 1;
   uint_t q0, q1;
-  int_t iChunk;
 
   q0 = qubits[qubits.size() - 2];
   q1 = qubits[qubits.size() - 1];
@@ -1112,14 +1148,14 @@ void ParallelStateExecutor<state_t>::apply_chunk_swap(const reg_t &qubits) {
     // inside chunk
     if (chunk_omp_parallel_ && Base::num_groups_ > 1) {
 #pragma omp parallel for num_threads(Base::num_groups_)
-      for (int_t ig = 0; ig < Base::num_groups_; ig++) {
-        for (int_t iChunk = Base::top_state_of_group_[ig];
+      for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++) {
+        for (uint_t iChunk = Base::top_state_of_group_[ig];
              iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
           Base::states_[iChunk].qreg().apply_mcswap(qubits);
       }
     } else {
-      for (int_t ig = 0; ig < Base::num_groups_; ig++) {
-        for (int_t iChunk = Base::top_state_of_group_[ig];
+      for (uint_t ig = 0; ig < Base::num_groups_; ig++) {
+        for (uint_t iChunk = Base::top_state_of_group_[ig];
              iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
           Base::states_[iChunk].qreg().apply_mcswap(qubits);
       }
@@ -1139,7 +1175,7 @@ void ParallelStateExecutor<state_t>::apply_chunk_swap(const reg_t &qubits) {
                                                  // processes
                                                  // is needed
       auto apply_chunk_swap_1qubit = [this, mask1, qubits](int_t iGroup) {
-        for (int_t ic = Base::top_state_of_group_[iGroup];
+        for (uint_t ic = Base::top_state_of_group_[iGroup];
              ic < Base::top_state_of_group_[iGroup + 1]; ic++) {
           uint_t baseChunk;
           baseChunk = ic & (~mask1);
@@ -1150,7 +1186,7 @@ void ParallelStateExecutor<state_t>::apply_chunk_swap(const reg_t &qubits) {
       };
       auto apply_chunk_swap_2qubits = [this, mask0, mask1,
                                        qubits](int_t iGroup) {
-        for (int_t ic = Base::top_state_of_group_[iGroup];
+        for (uint_t ic = Base::top_state_of_group_[iGroup];
              ic < Base::top_state_of_group_[iGroup + 1]; ic++) {
           uint_t baseChunk;
           baseChunk = ic & (~(mask0 | mask1));
@@ -1172,7 +1208,8 @@ void ParallelStateExecutor<state_t>::apply_chunk_swap(const reg_t &qubits) {
     }
 #ifdef AER_MPI
     else {
-      int_t iPair;
+      uint_t nLarge = 1;
+      uint_t iPair;
       uint_t nPair;
       uint_t baseChunk, iChunk1, iChunk2;
 
@@ -1343,14 +1380,14 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
   // swap inside chunks to prepare for all-to-all shuffle
   if (chunk_omp_parallel_ && Base::num_groups_ > 1) {
 #pragma omp parallel for
-    for (int_t ig = 0; ig < Base::num_groups_; ig++) {
-      for (int_t iChunk = Base::top_state_of_group_[ig];
+    for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++) {
+      for (uint_t iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
         Base::states_[iChunk].qreg().apply_multi_swaps(local_swaps);
     }
   } else {
-    for (int_t ig = 0; ig < Base::num_groups_; ig++) {
-      for (int_t iChunk = Base::top_state_of_group_[ig];
+    for (uint_t ig = 0; ig < Base::num_groups_; ig++) {
+      for (uint_t iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
         Base::states_[iChunk].qreg().apply_multi_swaps(local_swaps);
     }
@@ -1366,7 +1403,7 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
 
   for (uint_t i = 0; i < nchunk; i++) {
     chunk_offset[i] = 0;
-    for (uint_t k = 0; k < nswap; k++) {
+    for (int_t k = 0; k < nswap; k++) {
       if (((i >> k) & 1) != 0)
         chunk_offset[i] += (1ull << chunk_shuffle_qubits[k]);
     }
@@ -1381,7 +1418,7 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
     uint_t i1, i2, k, ii, t;
     baseChunk = 0;
     ii = iPair;
-    for (k = 0; k < nswap; k++) {
+    for (k = 0; k < (uint_t)nswap; k++) {
       t = ii & ((1ull << chunk_shuffle_qubits_sorted[k]) - 1);
       baseChunk += t;
       ii = (ii - t) << 1;
@@ -1395,7 +1432,6 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
     // all-to-all
     // send data
     for (uint_t iswap = 1; iswap < nchunk; iswap++) {
-      uint_t sizeRecv, sizeSend;
       uint_t num_local_swap = 0;
       for (i1 = 0; i1 < nchunk; i1++) {
         i2 = i1 ^ iswap;
@@ -1412,6 +1448,7 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
           continue; // swap while data is exchanged between processes
         }
 #ifdef AER_MPI
+        uint_t sizeRecv, sizeSend;
         uint_t offset1 = i1 << (chunk_bits_ * qubit_scale() - nswap);
         uint_t offset2 = i2 << (chunk_bits_ * qubit_scale() - nswap);
         uint_t iChunk1 =
@@ -1419,7 +1456,7 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
         uint_t iChunk2 =
             baseChunk + chunk_offset[i2] - Base::global_state_index_;
 
-        int_t tid = (iPair << nswap) + iswap;
+        uint_t tid = (iPair << nswap) + iswap;
 
         if (iProc1 == Base::distributed_rank_) {
           auto pRecv = Base::states_[iChunk1].qreg().recv_buffer(sizeRecv);
@@ -1499,14 +1536,14 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
   // restore qubits order
   if (chunk_omp_parallel_ && Base::num_groups_ > 1) {
 #pragma omp parallel for
-    for (int_t ig = 0; ig < Base::num_groups_; ig++) {
-      for (int_t iChunk = Base::top_state_of_group_[ig];
+    for (int_t ig = 0; ig < (int_t)Base::num_groups_; ig++) {
+      for (uint_t iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
         Base::states_[iChunk].qreg().apply_multi_swaps(local_swaps);
     }
   } else {
-    for (int_t ig = 0; ig < Base::num_groups_; ig++) {
-      for (int_t iChunk = Base::top_state_of_group_[ig];
+    for (uint_t ig = 0; ig < Base::num_groups_; ig++) {
+      for (uint_t iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
         Base::states_[iChunk].qreg().apply_multi_swaps(local_swaps);
     }
@@ -1515,13 +1552,10 @@ void ParallelStateExecutor<state_t>::apply_multi_chunk_swap(
 
 template <class state_t>
 void ParallelStateExecutor<state_t>::apply_chunk_x(const uint_t qubit) {
-  int_t iChunk;
-  uint_t nLarge = 1;
-
   if (qubit < chunk_bits_ * qubit_scale()) {
     auto apply_mcx = [this, qubit](int_t ig) {
       reg_t qubits(1, qubit);
-      for (int_t iChunk = Base::top_state_of_group_[ig];
+      for (uint_t iChunk = Base::top_state_of_group_[ig];
            iChunk < Base::top_state_of_group_[ig + 1]; iChunk++)
         Base::states_[iChunk].qreg().apply_mcx(qubits);
     };
@@ -1529,9 +1563,7 @@ void ParallelStateExecutor<state_t>::apply_chunk_x(const uint_t qubit) {
         (chunk_omp_parallel_ && Base::num_groups_ > 1), 0, Base::num_groups_,
         apply_mcx);
   } else { // exchange over chunks
-    int_t iPair;
     uint_t nPair, mask;
-    uint_t baseChunk, iChunk1, iChunk2;
     reg_t qubits(2);
     qubits[0] = qubit;
     qubits[1] = qubit;
@@ -1547,7 +1579,7 @@ void ParallelStateExecutor<state_t>::apply_chunk_x(const uint_t qubit) {
       nPair = Base::num_local_states_ >> 1;
 
       auto apply_chunk_swap = [this, mask, qubits](int_t iGroup) {
-        for (int_t ic = Base::top_state_of_group_[iGroup];
+        for (uint_t ic = Base::top_state_of_group_[iGroup];
              ic < Base::top_state_of_group_[iGroup + 1]; ic++) {
           uint_t pairChunk;
           pairChunk = ic ^ mask;
@@ -1562,6 +1594,9 @@ void ParallelStateExecutor<state_t>::apply_chunk_x(const uint_t qubit) {
     }
 #ifdef AER_MPI
     else {
+      uint_t iPair;
+      uint_t baseChunk, iChunk1, iChunk2;
+
       // chunk scheduler that supports any number of processes
       uint_t nu[3];
       uint_t ub[3];
@@ -1570,7 +1605,6 @@ void ParallelStateExecutor<state_t>::apply_chunk_x(const uint_t qubit) {
       uint_t iLocalChunk, iRemoteChunk, iProc;
       int i;
 
-      nLarge = 1;
       nu[0] = 1ull << (qubit - chunk_bits_ * qubit_scale());
       ub[0] = 0;
       iu[0] = 0;
@@ -1864,8 +1898,8 @@ void ParallelStateExecutor<state_t>::gather_state(
     AER::Vector<std::complex<data_t>> &state) {
 #ifdef AER_MPI
   if (Base::distributed_procs_ > 1) {
-    uint_t size, local_size, global_size, offset;
-    int i;
+    uint_t global_size;
+    uint_t i;
 
     std::vector<int> recv_counts(Base::distributed_procs_);
     std::vector<int> recv_offset(Base::distributed_procs_);

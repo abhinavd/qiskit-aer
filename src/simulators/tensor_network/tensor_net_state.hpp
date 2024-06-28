@@ -34,47 +34,31 @@ namespace TensorNetwork {
 
 using OpType = Operations::OpType;
 
+// clang-format off
 // OpSet of supported instructions
 const Operations::OpSet StateOpSet(
     // Op types
-    {OpType::gate,
-     OpType::measure,
-     OpType::reset,
-     OpType::initialize,
-     OpType::barrier,
-     OpType::bfunc,
-     OpType::roerror,
-     OpType::matrix,
-     OpType::diagonal_matrix,
-     OpType::multiplexer,
-     OpType::kraus,
-     OpType::superop,
-     OpType::qerror_loc,
-     OpType::sim_op,
-     OpType::set_statevec,
-     OpType::set_densmat,
-     OpType::save_expval,
-     OpType::save_expval_var,
-     OpType::save_probs,
-     OpType::save_probs_ket,
-     OpType::save_amps,
-     OpType::save_amps_sq,
-     OpType::save_state,
-     OpType::save_statevec,
-     OpType::save_statevec_dict,
-     OpType::save_densmat,
-     OpType::jump,
-     OpType::mark},
+    { OpType::gate,               OpType::measure,        OpType::reset,
+      OpType::initialize,         OpType::barrier,        OpType::bfunc,
+      OpType::roerror,            OpType::matrix,         OpType::diagonal_matrix,
+      OpType::multiplexer,        OpType::kraus,          OpType::superop,
+      OpType::qerror_loc,         OpType::sim_op,         OpType::set_statevec,
+      OpType::set_densmat,        OpType::save_expval,    OpType::save_expval_var,
+      OpType::save_probs,         OpType::save_probs_ket, OpType::save_amps,
+      OpType::save_amps_sq,       OpType::save_state,     OpType::save_statevec,
+      OpType::save_statevec_dict, OpType::save_densmat,   OpType::jump,
+      OpType::mark, OpType::store},
     // Gates
     {"u1",   "u2",    "u3",     "u",     "U",     "CX",       "cx",
      "cz",   "cy",    "cp",     "cu1",   "cu2",   "cu3",      "swap",
      "id",   "p",     "x",      "y",     "z",     "h",        "s",
      "sdg",  "t",     "tdg",    "r",     "rx",    "ry",       "rz",
-     "rxx",  "ryy",   "rzz",    "rzx",   "ccx",   "cswap",    "mcx",
+     "rxx",  "ryy",   "rzz",    "rzx",   "ccx",   "ccz",      "mcx",
      "mcy",  "mcz",   "mcu1",   "mcu2",  "mcu3",  "mcswap",   "mcphase",
-     "mcr",  "mcrx",  "mcry",   "mcry",  "sx",    "sxdg",     "csx",
+     "mcr",  "mcrx",  "mcry",   "mcrz",  "sx",    "sxdg",     "csx",
      "mcsx", "csxdg", "mcsxdg", "delay", "pauli", "mcx_gray", "cu",
-     "mcu",  "mcp",   "ecr"});
+     "mcu",  "mcp",   "ecr",    "cswap", "crx",   "cry",      "crz"});
+// clang-format on
 
 // Allowed gates enum class
 enum class Gates {
@@ -139,8 +123,8 @@ public:
 
   // Sample n-measurement outcomes without applying the measure operation
   // to the system state
-  virtual std::vector<reg_t> sample_measure(const reg_t &qubits, uint_t shots,
-                                            RngEngine &rng) override;
+  virtual std::vector<SampleVector>
+  sample_measure(const reg_t &qubits, uint_t shots, RngEngine &rng) override;
 
   // Load the threshold for applying OpenMP parallelization
   // if the controller/engine allows threads for it
@@ -361,8 +345,12 @@ const stringmap_t<Gates> State<tensor_net_t>::gateset_(
      {"csx", Gates::mcsx},     // Controlled-Sqrt(X) gate
      {"csxdg", Gates::mcsxdg}, // Controlled-Sqrt(X)dg gate
      {"ecr", Gates::ecr},      // ECR Gate
+     {"crx", Gates::mcrx},     // Controlled X-rotation gate
+     {"cry", Gates::mcry},     // Controlled Y-rotation gate
+     {"crz", Gates::mcrz},     // Controlled Z-rotation gate
      /* 3-qubit gates */
      {"ccx", Gates::mcx},      // Controlled-CX gate (Toffoli)
+     {"ccz", Gates::mcz},      // Controlled-CZ gate
      {"cswap", Gates::mcswap}, // Controlled SWAP gate (Fredkin)
      /* Multi-qubit controlled gates */
      {"mcx", Gates::mcx},       // Multi-controlled-X gate
@@ -896,31 +884,28 @@ void State<tensor_net_t>::measure_reset_update(
 }
 
 template <class tensor_net_t>
-std::vector<reg_t> State<tensor_net_t>::sample_measure(const reg_t &qubits,
-                                                       uint_t shots,
-                                                       RngEngine &rng) {
-  int_t i, j;
+std::vector<SampleVector>
+State<tensor_net_t>::sample_measure(const reg_t &qubits, uint_t shots,
+                                    RngEngine &rng) {
   // Generate flat register for storing
   std::vector<double> rnds(shots);
 
-  for (i = 0; i < shots; ++i)
+  for (uint_t i = 0; i < shots; ++i)
     rnds[i] = rng.rand(0, 1);
 
-  std::vector<reg_t> samples = BaseState::qreg_.sample_measure(rnds);
-  std::vector<reg_t> ret(shots);
+  std::vector<SampleVector> samples = BaseState::qreg_.sample_measure(rnds);
+  std::vector<SampleVector> ret(shots, SampleVector(qubits.size()));
 
   if (omp_get_num_threads() > 1) {
-    for (i = 0; i < shots; ++i) {
-      ret[i].resize(qubits.size());
-      for (j = 0; j < qubits.size(); j++)
-        ret[i][j] = samples[i][qubits[j]];
+    for (uint_t i = 0; i < shots; ++i) {
+      for (uint_t j = 0; j < qubits.size(); j++)
+        ret[i].set(j, samples[i][qubits[j]]);
     }
   } else {
-#pragma omp parallel for private(j)
-    for (i = 0; i < shots; ++i) {
-      ret[i].resize(qubits.size());
-      for (j = 0; j < qubits.size(); j++)
-        ret[i][j] = samples[i][qubits[j]];
+#pragma omp parallel for
+    for (int_t i = 0; i < (int_t)shots; ++i) {
+      for (uint_t j = 0; j < qubits.size(); j++)
+        ret[i].set(j, samples[i][qubits[j]]);
     }
   }
   return ret;
@@ -928,10 +913,21 @@ std::vector<reg_t> State<tensor_net_t>::sample_measure(const reg_t &qubits,
 
 template <class tensor_net_t>
 void State<tensor_net_t>::apply_initialize(const reg_t &qubits,
-                                           const cvector_t<double> &params,
+                                           const cvector_t<double> &params_in,
                                            RngEngine &rng) {
   auto sorted_qubits = qubits;
   std::sort(sorted_qubits.begin(), sorted_qubits.end());
+  // apply global phase here
+  cvector_t<double> tmp;
+  if (BaseState::has_global_phase_) {
+    tmp.resize(params_in.size());
+    auto apply_global_phase = [&tmp, params_in, this](int_t i) {
+      tmp[i] = params_in[i] * BaseState::global_phase_;
+    };
+    Utils::apply_omp_parallel_for((qubits.size() > 14), 0, params_in.size(),
+                                  apply_global_phase, BaseState::threads_);
+  }
+  const cvector_t<double> &params = tmp.empty() ? params_in : tmp;
   if (qubits.size() == BaseState::qreg_.num_qubits()) {
     // If qubits is all ordered qubits in the statevector
     // we can just initialize the whole state directly
@@ -952,7 +948,7 @@ void State<tensor_net_t>::initialize_from_vector(
   BaseState::qreg_.initialize();
 
   reg_t qubits(BaseState::qreg_.num_qubits());
-  for (int_t i = 0; i < BaseState::qreg_.num_qubits(); i++)
+  for (uint_t i = 0; i < BaseState::qreg_.num_qubits(); i++)
     qubits[i] = i;
   BaseState::qreg_.initialize_component(qubits, params);
 }

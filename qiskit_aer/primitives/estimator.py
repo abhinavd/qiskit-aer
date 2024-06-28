@@ -1,6 +1,6 @@
 # This code is part of Qiskit.
 #
-# (C) Copyright IBM 2022.
+# (C) Copyright IBM 2022, 2023.
 #
 # This code is licensed under the Apache License, Version 2.0. You may
 # obtain a copy of this license in the LICENSE.txt file in the root directory
@@ -23,7 +23,6 @@ from warnings import warn
 import numpy as np
 from qiskit.circuit import ParameterExpression, QuantumCircuit
 from qiskit.compiler import transpile
-from qiskit.opflow import PauliSumOp
 from qiskit.primitives import BaseEstimator, EstimatorResult
 from qiskit.primitives.primitive_job import PrimitiveJob
 from qiskit.primitives.utils import _circuit_key, _observable_key, init_observable
@@ -39,7 +38,7 @@ from qiskit.transpiler.passes import (
     Optimize1qGatesDecomposition,
     SetLayout,
 )
-from qiskit.utils import deprecate_arg, deprecate_func
+from qiskit.utils import deprecate_func
 
 from .. import AerError, AerSimulator
 
@@ -76,12 +75,6 @@ class Estimator(BaseEstimator):
           normal distribution approximation.
     """
 
-    @deprecate_arg(
-        "approximation",
-        since=0.13,
-        package_name="qiskit-aer",
-        additional_msg="approximation=True will be default in the future.",
-    )
     def __init__(
         self,
         *,
@@ -98,12 +91,17 @@ class Estimator(BaseEstimator):
             transpile_options: Options passed to transpile.
             run_options: Options passed to run.
             approximation: If True, it calculates expectation values with normal distribution
-                approximation.
+                approximation. Note that this appproximation ignores readout errors.
             skip_transpilation: If True, transpilation is skipped.
             abelian_grouping: Whether the observable should be grouped into commuting.
                 If approximation is True, this parameter is ignored and assumed to be False.
         """
         super().__init__(options=run_options)
+        # These three private attributes used to be created by super, but were deprecated in Qiskit
+        # 0.46. See https://github.com/Qiskit/qiskit/pull/11051
+        self._circuits = []
+        self._parameters = []
+        self._observables = []
 
         backend_options = {} if backend_options is None else backend_options
         method = (
@@ -118,7 +116,7 @@ class Estimator(BaseEstimator):
             warn(
                 "Option approximation=False is deprecated as of qiskit-aer 0.13. "
                 "It will be removed no earlier than 3 months after the release date. "
-                "Instead, use BackendEstmator from qiskit.primitives.",
+                "Instead, use BackendEstimator from qiskit.primitives.",
                 DeprecationWarning,
                 stacklevel=3,
             )
@@ -133,7 +131,7 @@ class Estimator(BaseEstimator):
 
     @property
     @deprecate_func(
-        since=0.13,
+        since="0.13",
         package_name="qiskit-aer",
         is_property=True,
     )
@@ -143,7 +141,7 @@ class Estimator(BaseEstimator):
 
     @approximation.setter
     @deprecate_func(
-        since=0.13,
+        since="0.13",
         package_name="qiskit-aer",
         is_property=True,
     )
@@ -153,7 +151,7 @@ class Estimator(BaseEstimator):
             warn(
                 "Option approximation=False is deprecated as of qiskit-aer 0.13. "
                 "It will be removed no earlier than 3 months after the release date. "
-                "Instead, use BackendEstmator from qiskit.primitives.",
+                "Instead, use BackendEstimator from qiskit.primitives.",
                 DeprecationWarning,
                 stacklevel=3,
             )
@@ -180,7 +178,7 @@ class Estimator(BaseEstimator):
     def _run(
         self,
         circuits: Sequence[QuantumCircuit],
-        observables: Sequence[BaseOperator | PauliSumOp],
+        observables: Sequence[BaseOperator],
         parameter_values: Sequence[Sequence[float]],
         **run_options,
     ) -> PrimitiveJob:
@@ -211,7 +209,8 @@ class Estimator(BaseEstimator):
             parameter_values,
             **run_options,
         )
-        job.submit()
+        # The public submit method was removed in Qiskit 0.46
+        (job.submit if hasattr(job, "submit") else job._submit)()  # pylint: disable=no-member
         return job
 
     def _compute(self, circuits, observables, parameter_values, run_options):
@@ -245,7 +244,7 @@ class Estimator(BaseEstimator):
             # Group and create measurement circuit
             for circ_ind, obs_indices in circ_obs_map.items():
                 pauli_list = sum(
-                    [self._observables[obs_ind].paulis for obs_ind in obs_indices]
+                    self._observables[obs_ind].paulis for obs_ind in obs_indices
                 ).unique()
                 if self._abelian_grouping:
                     pauli_lists = pauli_list.group_commuting(qubit_wise=True)
@@ -285,7 +284,7 @@ class Estimator(BaseEstimator):
         if experiments:
             results = (
                 self._backend.run(
-                    circuits=experiments,
+                    experiments,
                     parameter_binds=parameter_binds if any(parameter_binds) else None,
                     **run_options,
                 )
@@ -533,6 +532,7 @@ class Estimator(BaseEstimator):
                 circuit = self._circuits[i].copy()
                 circuit.measure_all()
                 num_qubits = circuit.num_qubits
+                self._backend.set_max_qubits(num_qubits)
                 circuit = self._transpile(circuit)
                 bit_map = {bit: index for index, bit in enumerate(circuit.qubits)}
                 layout = [bit_map[qr[0]] for _, qr, _ in circuit[-num_qubits:]]

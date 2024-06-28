@@ -22,9 +22,10 @@ ADD_CUDA_REQUIREMENTS = (
 extras_requirements = {"dask": ["dask", "distributed"]}
 
 requirements = [
-    "qiskit-terra>=0.21.0",
+    "qiskit>=1.1.0",
     "numpy>=1.16.3",
     "scipy>=1.0",
+    "psutil>=5",
 ]
 
 classifiers = [
@@ -42,6 +43,7 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
 ]
 
@@ -64,6 +66,7 @@ if ADD_CUDA_REQUIREMENTS and "gpu" in PACKAGE_NAME and "rocm" not in PACKAGE_NAM
     else:
         requirements_cuda = [
             "nvidia-cuda-runtime-cu12>=12.1.105",
+            "nvidia-nvjitlink-cu12",
             "nvidia-cublas-cu12>=12.1.3.1",
             "nvidia-cusolver-cu12>=11.4.5.107",
             "nvidia-cusparse-cu12>=12.1.0.106",
@@ -89,6 +92,7 @@ is_win_32_bit = platform.system() == "Windows" and platform.architecture()[0] ==
 if is_win_32_bit:
     cmake_args.append("-DCMAKE_GENERATOR_PLATFORM=Win32")
 
+
 setup(
     name=PACKAGE_NAME,
     version=VERSION,
@@ -99,7 +103,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/Qiskit/qiskit-aer",
     author="AER Development Team",
-    author_email="hello@qiskit.org",
+    author_email="qiskit@us.ibm.com",
     license="Apache 2.0",
     classifiers=classifiers,
     python_requires=">=3.7",

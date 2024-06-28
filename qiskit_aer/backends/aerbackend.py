@@ -29,10 +29,11 @@ from qiskit.providers.models import BackendStatus
 from qiskit.pulse import Schedule, ScheduleBlock
 from qiskit.qobj import QasmQobj, PulseQobj
 from qiskit.result import Result
+from qiskit.transpiler import CouplingMap
 from ..aererror import AerError
 from ..jobs import AerJob, AerJobSet, split_qobj
 from ..noise.noise_model import NoiseModel, QuantumErrorLocation
-from ..noise.errors.quantum_error import QuantumChannelInstruction
+from ..noise.errors.base_quantum_error import QuantumChannelInstruction
 from .aer_compiler import compile_circuit, assemble_circuits, generate_aer_config
 from .backend_utils import format_save_type, circuit_optypes
 from .name_mapping import NAME_MAPPING
@@ -48,7 +49,7 @@ class AerBackend(Backend, ABC):
     """Aer Backend class."""
 
     def __init__(
-        self, configuration, properties=None, defaults=None, backend_options=None, provider=None
+        self, configuration, properties=None, provider=None, target=None, backend_options=None
     ):
         """Aer class for backends.
 
@@ -59,8 +60,8 @@ class AerBackend(Backend, ABC):
         Args:
             configuration (BackendConfiguration): backend configuration.
             properties (BackendProperties or None): Optional, backend properties.
-            defaults (PulseDefaults or None): Optional, backend pulse defaults.
             provider (Provider): Optional, provider responsible for this backend.
+            target (Target):  initial target for backend
             backend_options (dict or None): Optional set custom backend options.
 
         Raises:
@@ -76,21 +77,23 @@ class AerBackend(Backend, ABC):
             backend_version=configuration.backend_version,
         )
 
-        # Initialize backend properties and pulse defaults.
+        # Initialize backend properties
         self._properties = properties
-        self._defaults = defaults
         self._configuration = configuration
 
-        # Custom option values for config, properties, and defaults
+        # Custom option values for config, properties
         self._options_configuration = {}
-        self._options_defaults = {}
         self._options_properties = {}
-        self._target = None
+        self._target = target
         self._mapping = NAME_MAPPING
 
         # Set options from backend_options dictionary
         if backend_options is not None:
             self.set_options(**backend_options)
+
+        # build coupling map
+        if self.configuration().coupling_map is not None:
+            self._coupling_map = CouplingMap(self.configuration().coupling_map)
 
     def _convert_circuit_binds(self, circuit, binds, idx_map):
         parameterizations = []
@@ -141,9 +144,9 @@ class AerBackend(Backend, ABC):
         ]
         return parameterizations
 
-    # pylint: disable=arguments-differ
+    # pylint: disable=arguments-renamed
     def run(self, circuits, validate=False, parameter_binds=None, **run_options):
-        """Run a qobj on the backend.
+        """Run circuits on the backend.
 
         Args:
             circuits (QuantumCircuit or list): The QuantumCircuit (or list
@@ -184,7 +187,7 @@ class AerBackend(Backend, ABC):
 
         if isinstance(circuits, (QasmQobj, PulseQobj)):
             warnings.warn(
-                "Using a qobj for run() is deprecated as of qiskit-aer 0.9.0"
+                "Using a qobj for run() is deprecated as of qiskit-aer 0.14"
                 " and will be removed no sooner than 3 months from that release"
                 " date. Transpiled circuits should now be passed directly using"
                 " `backend.run(circuits, **run_options).",
@@ -241,7 +244,7 @@ class AerBackend(Backend, ABC):
             )
         else:
             raise TypeError(
-                "bad input to run() function;" "circuits must be either circuits or schedules"
+                "bad input to run() function; circuits must be either circuits or schedules"
             )
 
     def _run_circuits(self, circuits, parameter_binds, **run_options):
@@ -313,7 +316,7 @@ class AerBackend(Backend, ABC):
         for key, val in self._options_configuration.items():
             setattr(config, key, val)
         # If config has custom instructions add them to
-        # basis gates to include them for the terra transpiler
+        # basis gates to include them for the qiskit transpiler
         if hasattr(config, "custom_instructions"):
             config.basis_gates = config.basis_gates + config.custom_instructions
         return config
@@ -330,18 +333,6 @@ class AerBackend(Backend, ABC):
             setattr(properties, key, val)
         return properties
 
-    def defaults(self):
-        """Return the simulator backend pulse defaults.
-
-        Returns:
-            PulseDefaults: The backend pulse defaults or ``None`` if the
-                           backend does not support pulse.
-        """
-        defaults = copy.copy(self._defaults)
-        for key, val in self._options_defaults.items():
-            setattr(defaults, key, val)
-        return defaults
-
     @property
     def max_circuits(self):
         if hasattr(self.configuration(), "max_experiments"):
@@ -351,17 +342,25 @@ class AerBackend(Backend, ABC):
 
     @property
     def target(self):
-        self._target = convert_to_target(
-            self.configuration(), self.properties(), self.defaults(), self._mapping
-        )
-        return self._target
+        if self._target is not None:
+            return self._target
+
+        tgt = convert_to_target(self.configuration(), self.properties(), None, NAME_MAPPING)
+        if self._coupling_map is not None:
+            tgt._coupling_graph = self._coupling_map.graph.copy()
+        return tgt
+
+    def set_max_qubits(self, max_qubits):
+        """Set maximun number of qubits to be used for this backend."""
+        if self._target is None:
+            self._configuration.n_qubits = max_qubits
+            self._set_configuration_option("n_qubits", max_qubits)
 
     def clear_options(self):
         """Reset the simulator options to default values."""
         self._options = self._default_options()
         self._options_configuration = {}
         self._options_properties = {}
-        self._options_defaults = {}
 
     def status(self):
         """Return backend status.
@@ -452,12 +451,15 @@ class AerBackend(Backend, ABC):
         # Compile circuits
         circuits, noise_model = self._compile(circuits, **run_options)
 
-        aer_circuits, idx_maps = assemble_circuits(circuits)
+        if self._target is not None:
+            aer_circuits, idx_maps = assemble_circuits(circuits, self.configuration().basis_gates)
+        else:
+            aer_circuits, idx_maps = assemble_circuits(circuits)
         if parameter_binds:
             run_options["parameterizations"] = self._convert_binds(
                 circuits, parameter_binds, idx_maps
             )
-        elif not all([len(circuit.parameters) == 0 for circuit in circuits]):
+        elif not all(len(circuit.parameters) == 0 for circuit in circuits):
             raise AerError("circuits have parameters but parameter_binds is not specified.")
 
         for circ_id, aer_circuit in enumerate(aer_circuits):
@@ -524,9 +526,7 @@ class AerBackend(Backend, ABC):
         optypes = [circuit_optypes(circ) for circ in circuits]
 
         # Compile Qasm3 instructions
-        circuits, optypes = compile_circuit(
-            circuits, basis_gates=self.configuration().basis_gates, optypes=optypes
-        )
+        circuits, optypes = compile_circuit(circuits, optypes=optypes)
 
         # run option noise model
         circuits, noise_model, run_options = self._assemble_noise_model(
@@ -702,8 +702,6 @@ class AerBackend(Backend, ABC):
             self._set_configuration_option(key, value)
         elif hasattr(self._properties, key):
             self._set_properties_option(key, value)
-        elif hasattr(self._defaults, key):
-            self._set_defaults_option(key, value)
         else:
             if not hasattr(self._options, key):
                 raise AerError(f"Invalid option {key}")
@@ -734,13 +732,6 @@ class AerBackend(Backend, ABC):
             self._options_properties[key] = value
         elif key in self._options_properties:
             self._options_properties.pop(key)
-
-    def _set_defaults_option(self, key, value):
-        """Special handling for setting backend defaults options."""
-        if value is not None:
-            self._options_defaults[key] = value
-        elif key in self._options_defaults:
-            self._options_defaults.pop(key)
 
     def __repr__(self):
         """String representation of an AerBackend."""

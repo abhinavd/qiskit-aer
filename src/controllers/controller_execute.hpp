@@ -29,18 +29,15 @@
 
 namespace AER {
 
+void initialize_libraries(const std::string &lib_dir) {
+  // Fix for MacOS and OpenMP library double initialization crash.
+  // Issue: https://github.com/Qiskit/qiskit-aer/issues/1
+  Hacks::maybe_load_openmp(lib_dir);
+}
+
 template <class controller_t, typename inputdata_t>
 Result controller_execute(const inputdata_t &qobj) {
   controller_t controller;
-
-  // Fix for MacOS and OpenMP library double initialization crash.
-  // Issue: https://github.com/Qiskit/qiskit-aer/issues/1
-  if (Parser<inputdata_t>::check_key("config", qobj)) {
-    std::string path;
-    const auto &config = Parser<inputdata_t>::get_value("config", qobj);
-    Parser<inputdata_t>::get_value(path, "library_dir", config);
-    Hacks::maybe_load_openmp(path);
-  }
   return controller.execute(qobj);
 }
 
@@ -118,13 +115,13 @@ Result controller_execute(std::vector<std::shared_ptr<Circuit>> &input_circs,
               param_circ->global_phase_for_params.resize(num_params);
               for (size_t j = 0; j < num_params; j++)
                 param_circ->global_phase_for_params[j] = params.second[j];
-            } else if (instr_pos >= num_instr) {
+            } else if ((uint_t)instr_pos >= num_instr) {
               throw std::invalid_argument(
                   R"(Invalid parameterized qobj: instruction position out of range)");
             }
             auto &op = param_circ->ops[instr_pos];
             if (!op.has_bind_params) {
-              if (param_pos >= op.params.size()) {
+              if ((uint_t)param_pos >= op.params.size()) {
                 throw std::invalid_argument(
                     R"(Invalid parameterized qobj: instruction param position out of range)");
               }
@@ -160,7 +157,7 @@ Result controller_execute(std::vector<std::shared_ptr<Circuit>> &input_circs,
                 // negative position is for global phase
                 circ->global_phase_angle = params.second[j];
               } else {
-                if (instr_pos >= num_instr) {
+                if ((uint_t)instr_pos >= num_instr) {
                   std::cout << "Invalid parameterization: instruction position "
                                "out of range: "
                             << instr_pos << std::endl;
@@ -168,7 +165,7 @@ Result controller_execute(std::vector<std::shared_ptr<Circuit>> &input_circs,
                       R"(Invalid parameterization: instruction position out of range)");
                 }
                 auto &op = param_circ->ops[instr_pos];
-                if (param_pos >= op.params.size()) {
+                if ((uint_t)param_pos >= op.params.size()) {
                   throw std::invalid_argument(
                       R"(Invalid parameterization: instruction param position out of range)");
                 }
@@ -215,7 +212,7 @@ Result controller_execute(std::vector<std::shared_ptr<Circuit>> &input_circs,
     for (auto &circ : circs) {
       circ->seed = seed + seed_shift;
       circ->seed_for_params.resize(circ->num_bind_params);
-      for (int_t i = 0; i < circ->num_bind_params; i++) {
+      for (uint_t i = 0; i < circ->num_bind_params; i++) {
         circ->seed_for_params[i] = seed + seed_shift;
         seed_shift += 2113;
       }
@@ -229,9 +226,6 @@ Result controller_execute(std::vector<std::shared_ptr<Circuit>> &input_circs,
   auto time_taken =
       std::chrono::duration<double>(myclock_t::now() - timer_start).count();
 
-  // Fix for MacOS and OpenMP library double initialization crash.
-  // Issue: https://github.com/Qiskit/qiskit-aer/issues/1
-  Hacks::maybe_load_openmp(config.library_dir);
   controller.set_config(config);
   auto ret = controller.execute(circs, noise_model, config);
 

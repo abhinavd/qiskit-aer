@@ -143,7 +143,7 @@ void bind_aer_circuit(MODULE m) {
        << ", num_registers=" << circ.num_registers;
 
     ss << ", ops={";
-    for (auto i = 0; i < circ.ops.size(); ++i)
+    for (uint_t i = 0; i < circ.ops.size(); ++i)
       if (i == 0)
         ss << circ.ops[i];
       else
@@ -194,6 +194,7 @@ void bind_aer_circuit(MODULE m) {
   aer_circuit.def("measure", &Circuit::measure);
   aer_circuit.def("reset", &Circuit::reset);
   aer_circuit.def("set_qerror_loc", &Circuit::set_qerror_loc);
+  aer_circuit.def("store", &Circuit::store);
 }
 
 #endif

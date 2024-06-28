@@ -45,9 +45,9 @@ const Operations::OpSet StateOpSet(
         Operations::OpType::save_statevec,
     }, // Operations::OpType::save_expval, Operations::OpType::save_expval_var},
     // Gates
-    {"CX", "u0",  "u1",  "p",   "cx",    "cz",   "swap", "id",
-     "x",  "y",   "z",   "h",   "s",     "sdg",  "sx",   "sxdg",
-     "t",  "tdg", "ccx", "ccz", "delay", "pauli"});
+    {"CX", "u0",  "u1",  "p",   "cx",    "cz",    "swap", "id",
+     "x",  "y",   "z",   "h",   "s",     "sdg",   "sx",   "sxdg",
+     "t",  "tdg", "ccx", "ccz", "delay", "pauli", "ecr",  "rz"});
 
 using chpauli_t = CHSimulator::pauli_t;
 using chstate_t = CHSimulator::Runner;
@@ -87,8 +87,11 @@ public:
 
   void set_config(const Config &config) override;
 
-  std::vector<reg_t> sample_measure(const reg_t &qubits, uint_t shots,
-                                    RngEngine &rng) override;
+  std::vector<SampleVector> sample_measure(const reg_t &qubits, uint_t shots,
+                                           RngEngine &rng) override;
+
+  bool
+  validate_parameters(const std::vector<Operations::Op> &ops) const override;
 
 protected:
   // Alongside the sample measure optimisaiton, we can parallelise
@@ -215,6 +218,7 @@ const stringmap_t<Gates> State::gateset_({
     {"sxdg", Gates::sxdg}, // Inverse sqrt(X) gate
     {"t", Gates::t},       // T-gate (sqrt(S))
     {"tdg", Gates::tdg},   // Conjguate-transpose of T gate
+    {"rz", Gates::rz},     // RZ gate (only support k * pi/2 cases)
     // Waltz Gates
     {"u0", Gates::u0}, // idle gate in multiples of X90
     {"u1", Gates::u1}, // zero-X90 pulse waltz gate
@@ -224,6 +228,7 @@ const stringmap_t<Gates> State::gateset_({
     {"cx", Gates::cx},     // Controlled-X gate (CNOT)
     {"cz", Gates::cz},     // Controlled-Z gate
     {"swap", Gates::swap}, // SWAP gate
+    {"ecr", Gates::ecr},   // ECR Gate
     // Three-qubit gates
     {"ccx", Gates::ccx}, // Controlled-CX gate (Toffoli)
     {"ccz", Gates::ccz}, // Constrolled-CZ gate (H3 Toff H3)
@@ -340,6 +345,23 @@ bool State::check_measurement_opt(InputIterator first,
   return true;
 }
 
+bool State::validate_parameters(const std::vector<Operations::Op> &ops) const {
+  for (uint_t i = 0; i < ops.size(); i++) {
+    if (ops[i].type == OpType::gate) {
+      // check parameter of RZ gates
+      if (ops[i].name == "rz") {
+        double pi2 = std::real(ops[i].params[0]) * 2.0 / M_PI;
+        double pi2_int = (double)std::round(pi2);
+
+        if (!AER::Linalg::almost_equal(pi2, pi2_int)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 //-------------------------------------------------------------------------
 // Implementation: Operations
 //-------------------------------------------------------------------------
@@ -419,8 +441,8 @@ void State::apply_ops(InputIterator first, InputIterator last,
   }
 }
 
-std::vector<reg_t> State::sample_measure(const reg_t &qubits, uint_t shots,
-                                         RngEngine &rng) {
+std::vector<SampleVector> State::sample_measure(const reg_t &qubits,
+                                                uint_t shots, RngEngine &rng) {
   std::vector<uint_t> output_samples;
   if (BaseState::qreg_.get_num_states() == 1) {
     output_samples = BaseState::qreg_.stabilizer_sampler(shots, rng);
@@ -443,13 +465,13 @@ std::vector<reg_t> State::sample_measure(const reg_t &qubits, uint_t shots,
       }
     }
   }
-  std::vector<reg_t> all_samples;
+  std::vector<SampleVector> all_samples;
   all_samples.reserve(shots);
   for (uint_t sample : output_samples) {
-    reg_t sample_bits(qubits.size(), 0ULL);
+    SampleVector sample_bits(qubits.size());
     for (size_t i = 0; i < qubits.size(); i++) {
       if ((sample >> qubits[i]) & 1ULL) {
-        sample_bits[i] = 1ULL;
+        sample_bits.set(i, true);
       }
     }
     all_samples.push_back(sample_bits);
@@ -467,6 +489,12 @@ template <typename InputIterator>
 void State::apply_ops_parallel(InputIterator first, InputIterator last,
                                ExperimentResult &result, RngEngine &rng) {
   const int_t NUM_STATES = BaseState::qreg_.get_num_states();
+
+  std::vector<size_t> rng_seeds(NUM_STATES);
+  for (int_t i = 0; i < NUM_STATES; i++) {
+    rng_seeds[i] = rng.rand_int<size_t>(0, SIZE_MAX);
+  }
+
 #pragma omp parallel for if (BaseState::qreg_.check_omp_threshold() &&         \
                              BaseState::threads_ > 1)                          \
     num_threads(BaseState::threads_)
@@ -474,10 +502,11 @@ void State::apply_ops_parallel(InputIterator first, InputIterator last,
     if (!BaseState::qreg_.check_eps(i)) {
       continue;
     }
+    RngEngine local_rng(rng_seeds[i]);
     for (auto it = first; it != last; it++) {
       switch (it->type) {
       case Operations::OpType::gate:
-        apply_gate(*it, rng, i);
+        apply_gate(*it, local_rng, i);
         break;
       case Operations::OpType::barrier:
       case Operations::OpType::qerror_loc:
@@ -630,6 +659,7 @@ void State::apply_gate(const Operations::Op &op, RngEngine &rng) {
 }
 
 void State::apply_gate(const Operations::Op &op, RngEngine &rng, uint_t rank) {
+  int_t pi2;
   auto it = gateset_.find(op.name);
   if (it == gateset_.end()) {
     throw std::invalid_argument("CH::State: Invalid gate operation \'" +
@@ -690,6 +720,27 @@ void State::apply_gate(const Operations::Op &op, RngEngine &rng, uint_t rank) {
     break;
   case Gates::pauli:
     apply_pauli(op.qubits, op.string_params[0], rank);
+    break;
+  case Gates::ecr:
+    BaseState::qreg_.apply_s(op.qubits[0], rank);
+    BaseState::qreg_.apply_sdag(op.qubits[1], rank);
+    BaseState::qreg_.apply_h(op.qubits[1], rank);
+    BaseState::qreg_.apply_sdag(op.qubits[1], rank);
+    BaseState::qreg_.apply_cx(op.qubits[0], op.qubits[1], rank);
+    BaseState::qreg_.apply_x(op.qubits[0], rank);
+    break;
+  case Gates::rz:
+    pi2 = (int_t)std::round(std::real(op.params[0]) * 2.0 / M_PI) & 3;
+    if (pi2 == 1) {
+      // S
+      BaseState::qreg_.apply_s(op.qubits[0], rank);
+    } else if (pi2 == 2) {
+      // Z
+      BaseState::qreg_.apply_z(op.qubits[0], rank);
+    } else if (pi2 == 3) {
+      // Sdg
+      BaseState::qreg_.apply_sdag(op.qubits[0], rank);
+    }
     break;
   default: // u0 or Identity
     break;

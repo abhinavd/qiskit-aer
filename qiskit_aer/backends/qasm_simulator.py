@@ -365,7 +365,6 @@ class QasmSimulator(AerBackend):
             "pauli",
             "mcx_gray",
             "ecr",
-            "reset",
         ]
     )
 
@@ -389,6 +388,7 @@ class QasmSimulator(AerBackend):
             "set_statevector",
             "set_density_matrix",
             "set_stabilizer",
+            "reset",
         ]
     )
 
@@ -444,7 +444,6 @@ class QasmSimulator(AerBackend):
         # Update available methods for class
         if QasmSimulator._AVAILABLE_METHODS is None:
             QasmSimulator._AVAILABLE_METHODS = available_methods(
-                self._controller,
                 QasmSimulator._SIMULATION_METHODS,
                 QasmSimulator._SIMULATION_DEVICES,
             )
@@ -528,6 +527,7 @@ class QasmSimulator(AerBackend):
             chop_threshold=1e-8,
             mps_parallel_threshold=14,
             mps_omp_threads=1,
+            mps_lapack=False,
         )
 
     @classmethod
@@ -634,7 +634,7 @@ class QasmSimulator(AerBackend):
                 # Print warning if clbits but no measure
                 if no_measure:
                     logger.warning(
-                        'No measurements in circuit "%s": ' "count data will return all zeros.",
+                        'No measurements in circuit "%s": count data will return all zeros.',
                         experiment.header.name,
                     )
 

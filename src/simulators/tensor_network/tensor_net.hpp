@@ -248,7 +248,8 @@ public:
   // Return M sampled outcomes for Z-basis measurement of all qubits
   // The input is a length M list of random reals between [0, 1) used for
   // generating samples.
-  std::vector<reg_t> sample_measure(const std::vector<double> &rnds) const;
+  std::vector<SampleVector>
+  sample_measure(const std::vector<double> &rnds) const;
 
   void apply_reset(const reg_t &qubits);
 
@@ -320,7 +321,7 @@ protected:
 
   void buffer_statevector(void) const;
 
-  void sample_measure_branch(std::vector<reg_t> &samples,
+  void sample_measure_branch(std::vector<SampleVector> &samples,
                              const std::vector<double> &rnds,
                              const reg_t &input_sample_index,
                              const reg_t &input_shot_index,
@@ -374,7 +375,7 @@ template <typename data_t>
 TensorNet<data_t>::TensorNet(const TensorNet &obj) {}
 template <typename data_t>
 TensorNet<data_t>::~TensorNet() {
-  int i;
+  uint_t i;
   for (i = 0; i < tensors_.size(); i++) {
     tensors_[i].reset();
   }
@@ -417,7 +418,7 @@ void TensorNet<data_t>::buffer_statevector(void) const {
   std::vector<int64_t> extents_out(num_qubits_);
 
   // output tensor
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     modes_out[i] = modes_qubits_[i];
     extents_out[i] = 2;
   }
@@ -464,9 +465,9 @@ TensorNet<data_t>::reduced_density_matrix(const reg_t &qubits) {
   uint_t nqubits = qubits.size();
 
   // connect qubits not to be reduced
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     bool check = false;
-    for (int_t j = 0; j < qubits.size(); j++) {
+    for (uint_t j = 0; j < qubits.size(); j++) {
       if (i == qubits[j]) {
         check = true;
         break;
@@ -491,7 +492,7 @@ TensorNet<data_t>::reduced_density_matrix(const reg_t &qubits) {
   std::vector<std::complex<data_t>> trace;
 
   // output tensor
-  for (int_t i = 0; i < nqubits; i++) {
+  for (uint_t i = 0; i < nqubits; i++) {
     modes_out[i] = modes_qubits_[qubits[i]];
     modes_out[i + nqubits] = modes_qubits_sp_[qubits[i]];
     extents_out[i] = 2;
@@ -505,9 +506,9 @@ TensorNet<data_t>::reduced_density_matrix(const reg_t &qubits) {
   delete contractor;
 
   // recover connectted qubits
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     bool check = false;
-    for (int_t j = 0; j < qubits.size(); j++) {
+    for (uint_t j = 0; j < qubits.size(); j++) {
       if (i == qubits[j]) {
         check = true;
         break;
@@ -538,7 +539,7 @@ void TensorNet<data_t>::initialize_component(const reg_t &qubits,
     statevector_.clear(); // invalidate statevector buffer
 
   cvector_t<data_t> state(state0.size());
-  for (int_t i = 0; i < state0.size(); i++)
+  for (uint_t i = 0; i < state0.size(); i++)
     state[i] = (std::complex<data_t>)state0[i];
 
   tensors_.push_back(std::make_shared<Tensor<data_t>>());
@@ -547,7 +548,7 @@ void TensorNet<data_t>::initialize_component(const reg_t &qubits,
   tensors_.push_back(std::make_shared<Tensor<data_t>>());
   tensors_[last + 1]->set_conj(qubits, state);
 
-  for (int i = 0; i < qubits.size(); i++) {
+  for (uint_t i = 0; i < qubits.size(); i++) {
     modes_qubits_[qubits[i]] = mode_index_;
     tensors_[last]->modes()[i] = mode_index_++;
     qubits_[qubits[i]] = tensors_[last];
@@ -584,7 +585,7 @@ void TensorNet<data_t>::add_tensor(const reg_t &qubits,
   tensors_.push_back(std::make_shared<Tensor<data_t>>());
   uint_t last = tensors_.size() - 1;
   tensors_[last]->set(qubits, mat);
-  for (int i = 0; i < qubits.size(); i++) {
+  for (uint_t i = 0; i < qubits.size(); i++) {
     tensors_[last]->modes()[i] = modes_qubits_[qubits[i]];
     modes_qubits_[qubits[i]] = mode_index_;
     tensors_[last]->modes()[qubits.size() + i] = mode_index_++;
@@ -594,7 +595,7 @@ void TensorNet<data_t>::add_tensor(const reg_t &qubits,
   tensors_.push_back(std::make_shared<Tensor<data_t>>());
   last++;
   tensors_[last]->set_conj(qubits, mat);
-  for (int i = 0; i < qubits.size(); i++) {
+  for (uint_t i = 0; i < qubits.size(); i++) {
     tensors_[last]->modes()[i] = modes_qubits_sp_[qubits[i]];
     modes_qubits_sp_[qubits[i]] = mode_index_;
     tensors_[last]->modes()[qubits.size() + i] = mode_index_++;
@@ -614,13 +615,13 @@ void TensorNet<data_t>::add_superop_tensor(
   uint_t last = tensors_.size() - 1;
   tensors_[last]->set(qubits, mat);
 
-  for (int i = 0; i < size; i++) {
+  for (uint_t i = 0; i < size; i++) {
     tensors_[last]->modes()[i] = modes_qubits_[qubits[i]];
     modes_qubits_[qubits[i]] = mode_index_;
     tensors_[last]->modes()[size * 2 + i] = mode_index_++;
     qubits_[qubits[i]] = tensors_[last];
   }
-  for (int i = 0; i < size; i++) {
+  for (uint_t i = 0; i < size; i++) {
     tensors_[last]->modes()[size + i] = modes_qubits_sp_[qubits[i]];
     modes_qubits_sp_[qubits[i]] = mode_index_;
     tensors_[last]->modes()[size * 3 + i] = mode_index_++;
@@ -636,7 +637,7 @@ void TensorNet<data_t>::add_superop_tensor(
 
 template <typename data_t>
 void TensorNet<data_t>::initialize() {
-  int i;
+  uint_t i;
 
   if (statevector_.size() > 0)
     statevector_.clear(); // invalidate statevector buffer
@@ -658,7 +659,7 @@ void TensorNet<data_t>::initialize() {
   for (i = 0; i < num_qubits_; i++) {
     tensors_.push_back(std::make_shared<Tensor<data_t>>());
     uint_t last = tensors_.size() - 1;
-    tensors_[last]->set({i}, init);
+    tensors_[last]->set({(int)i}, init);
 
     modes_qubits_[i] = mode_index_;
     tensors_[last]->modes()[0] = mode_index_++;
@@ -667,7 +668,7 @@ void TensorNet<data_t>::initialize() {
   for (i = 0; i < num_qubits_; i++) { // for super qubits
     tensors_.push_back(std::make_shared<Tensor<data_t>>());
     uint_t last = tensors_.size() - 1;
-    tensors_[last]->set({i}, init);
+    tensors_[last]->set({(int)i}, init);
 
     modes_qubits_sp_[i] = mode_index_;
     tensors_[last]->modes()[0] = mode_index_++;
@@ -700,19 +701,19 @@ void TensorNet<data_t>::initialize(const TensorNet<data_t> &obj) {
 template <typename data_t>
 void TensorNet<data_t>::initialize_from_matrix(const cmatrix_t &matrix0) {
   cvector_t<data_t> matrix(matrix0.size());
-  for (int_t i = 0; i < matrix0.size(); i++)
+  for (uint_t i = 0; i < matrix0.size(); i++)
     matrix[i] = (std::complex<data_t>)matrix0[i];
 
   tensors_.push_back(std::make_shared<Tensor<data_t>>());
   uint_t last = tensors_.size() - 1;
   tensors_[last]->set(num_qubits_, matrix);
 
-  for (int i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     modes_qubits_[i] = mode_index_++;
     tensors_[last]->modes()[i] = modes_qubits_[i];
     qubits_[i] = tensors_[last];
   }
-  for (int i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     modes_qubits_sp_[i] = mode_index_++;
     tensors_[last]->modes()[i + num_qubits_] = modes_qubits_sp_[i];
     qubits_sp_[i] = tensors_[last];
@@ -772,7 +773,6 @@ void TensorNet<data_t>::apply_multiplexer(const reg_t &control_qubits,
   for (const auto &q : control_qubits) {
     qubits.push_back(q);
   }
-  size_t N = qubits.size();
 
   cvector_t<double> matMP(DIM * DIM, 0.0);
   uint_t b, i, j;
@@ -794,11 +794,10 @@ template <typename data_t>
 void TensorNet<data_t>::apply_diagonal_matrix(const reg_t &qubits,
                                               const cvector_t<double> &diag) {
   cvector_t<data_t> mat(diag.size() * diag.size(), 0.0);
-  for (int_t i = 0; i < diag.size(); i++) {
+  for (uint_t i = 0; i < diag.size(); i++) {
     mat[i * (diag.size() + 1)] = diag[i];
   }
 
-  Tensor<data_t> *t = new Tensor<data_t>;
   add_tensor(qubits, mat);
 }
 
@@ -806,7 +805,7 @@ template <typename data_t>
 void TensorNet<data_t>::apply_diagonal_superop_matrix(
     const reg_t &qubits, const cvector_t<double> &diag) {
   cvector_t<data_t> mat(diag.size() * diag.size(), 0.0);
-  for (int_t i = 0; i < diag.size(); i++) {
+  for (uint_t i = 0; i < diag.size(); i++) {
     mat[i * (diag.size() + 1)] = diag[i];
   }
   add_superop_tensor(qubits, mat);
@@ -833,7 +832,7 @@ void TensorNet<data_t>::apply_mcx(const reg_t &qubits) {
 
   reg_t qubits_t;
   qubits_t.push_back(qubits[qubits.size() - 1]);
-  for (int i = 0; i < qubits.size() - 1; i++)
+  for (uint_t i = 0; i < qubits.size() - 1; i++)
     qubits_t.push_back(qubits[i]);
 
   add_tensor(qubits_t, mat);
@@ -850,7 +849,7 @@ void TensorNet<data_t>::apply_mcy(const reg_t &qubits) {
 
   reg_t qubits_t;
   qubits_t.push_back(qubits[qubits.size() - 1]);
-  for (int i = 0; i < qubits.size() - 1; i++)
+  for (uint_t i = 0; i < qubits.size() - 1; i++)
     qubits_t.push_back(qubits[i]);
 
   add_tensor(qubits_t, mat);
@@ -869,7 +868,7 @@ void TensorNet<data_t>::apply_mcswap(const reg_t &qubits) {
   reg_t qubits_t;
   qubits_t.push_back(qubits[qubits.size() - 2]);
   qubits_t.push_back(qubits[qubits.size() - 1]);
-  for (int i = 0; i < qubits.size() - 2; i++)
+  for (uint_t i = 0; i < qubits.size() - 2; i++)
     qubits_t.push_back(qubits[i]);
 
   add_tensor(qubits_t, mat);
@@ -886,7 +885,7 @@ void TensorNet<data_t>::apply_mcphase(const reg_t &qubits,
 
   reg_t qubits_t;
   qubits_t.push_back(qubits[qubits.size() - 1]);
-  for (int i = 0; i < qubits.size() - 1; i++)
+  for (uint_t i = 0; i < qubits.size() - 1; i++)
     qubits_t.push_back(qubits[i]);
 
   add_tensor(qubits_t, mat);
@@ -907,7 +906,7 @@ void TensorNet<data_t>::apply_mcu(const reg_t &qubits,
 
   reg_t qubits_t;
   qubits_t.push_back(qubits[qubits.size() - 1]);
-  for (int i = 0; i < qubits.size() - 1; i++)
+  for (uint_t i = 0; i < qubits.size() - 1; i++)
     qubits_t.push_back(qubits[i]);
 
   add_tensor(qubits_t, matR);
@@ -951,7 +950,7 @@ void TensorNet<data_t>::apply_rotation(const reg_t &qubits, const Rotation r,
 template <typename data_t>
 double TensorNet<data_t>::norm() const {
   // connect qubits not used for trace
-  for (int_t i = 1; i < num_qubits_; i++) {
+  for (uint_t i = 1; i < num_qubits_; i++) {
     for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
       if (qubits_sp_[i]->modes()[j] == modes_qubits_sp_[i]) {
         qubits_sp_[i]->modes()[j] = modes_qubits_[i];
@@ -980,7 +979,7 @@ double TensorNet<data_t>::norm() const {
   delete contractor;
 
   // restore connected qubits
-  for (int_t i = 1; i < num_qubits_; i++) {
+  for (uint_t i = 1; i < num_qubits_; i++) {
     for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
       if (qubits_sp_[i]->modes()[j] == modes_qubits_[i]) {
         qubits_sp_[i]->modes()[j] = modes_qubits_sp_[i];
@@ -1002,26 +1001,26 @@ double TensorNet<data_t>::norm(const reg_t &qubits,
 
   // additional matrix
   std::vector<std::complex<data_t>> mat_t(mat.size());
-  for (int_t i = 0; i < mat.size(); i++)
+  for (uint_t i = 0; i < mat.size(); i++)
     mat_t[i] = mat[i];
 
   mat_tensors[0] = std::make_shared<Tensor<data_t>>();
   mat_tensors[0]->set(qubits, mat_t);
-  for (int i = 0; i < qubits.size(); i++) {
+  for (uint_t i = 0; i < qubits.size(); i++) {
     mat_tensors[0]->modes()[i] = tmp_modes[qubits[i]];
     tmp_modes[qubits[i]] = tmp_index;
     mat_tensors[0]->modes()[qubits.size() + i] = tmp_index++;
   }
   mat_tensors[1] = std::make_shared<Tensor<data_t>>();
   mat_tensors[1]->set_conj(qubits, mat_t);
-  for (int i = 0; i < qubits.size(); i++) {
+  for (uint_t i = 0; i < qubits.size(); i++) {
     mat_tensors[1]->modes()[i] = tmp_modes_sp[qubits[i]];
     tmp_modes_sp[qubits[i]] = tmp_index;
     mat_tensors[1]->modes()[qubits.size() + i] = tmp_index++;
   }
 
   // connect qubits not used for trace
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     if (i != qubits[0]) {
       for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
         if (qubits_sp_[i]->modes()[j] == modes_qubits_sp_[i]) {
@@ -1054,7 +1053,7 @@ double TensorNet<data_t>::norm(const reg_t &qubits,
   delete contractor;
 
   // restore connected qubits
-  for (int_t i = 1; i < num_qubits_; i++) {
+  for (uint_t i = 1; i < num_qubits_; i++) {
     if (i != qubits[0]) {
       for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
         if (qubits_sp_[i]->modes()[j] == tmp_modes[i]) {
@@ -1085,7 +1084,7 @@ double TensorNet<data_t>::probability(const uint_t outcome) const {
 template <typename data_t>
 std::vector<double> TensorNet<data_t>::probabilities() const {
   reg_t qubits(num_qubits_);
-  for (int_t i = 0; i < num_qubits_; i++)
+  for (uint_t i = 0; i < num_qubits_; i++)
     qubits[i] = i;
   return probabilities(qubits);
 }
@@ -1099,9 +1098,9 @@ TensorNet<data_t>::probabilities(const reg_t &qubits) const {
   std::vector<int64_t> extents_out(nqubits * 2);
   std::vector<std::complex<data_t>> trace;
   // connect qubits not to be measured
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     bool check = false;
-    for (int_t j = 0; j < qubits.size(); j++) {
+    for (uint_t j = 0; j < qubits.size(); j++) {
       if (i == qubits[j]) {
         check = true;
         break;
@@ -1122,7 +1121,7 @@ TensorNet<data_t>::probabilities(const reg_t &qubits) const {
   contractor->set_network(tensors_);
 
   // output tensor
-  for (int_t i = 0; i < nqubits; i++) {
+  for (uint_t i = 0; i < nqubits; i++) {
     modes_out[i] = modes_qubits_[qubits[i]];
     modes_out[i + nqubits] = modes_qubits_sp_[qubits[i]];
     extents_out[i] = 2;
@@ -1147,9 +1146,9 @@ TensorNet<data_t>::probabilities(const reg_t &qubits) const {
   delete contractor;
 
   // recover connected qubits
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     bool check = false;
-    for (int_t j = 0; j < qubits.size(); j++) {
+    for (uint_t j = 0; j < qubits.size(); j++) {
       if (i == qubits[j]) {
         check = true;
         break;
@@ -1177,10 +1176,10 @@ void TensorNet<data_t>::apply_reset(const reg_t &qubits) {
 // Sample measure outcomes
 //------------------------------------------------------------------------------
 template <typename data_t>
-std::vector<reg_t>
+std::vector<SampleVector>
 TensorNet<data_t>::sample_measure(const std::vector<double> &rnds) const {
   const int_t SHOTS = rnds.size();
-  std::vector<reg_t> samples(SHOTS);
+  std::vector<SampleVector> samples(SHOTS);
   reg_t sample_index(SHOTS);
   reg_t shot_index(SHOTS);
   reg_t probs(num_qubits_, 0);
@@ -1195,13 +1194,11 @@ TensorNet<data_t>::sample_measure(const std::vector<double> &rnds) const {
 }
 
 template <typename data_t>
-void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
-                                              const std::vector<double> &rnds,
-                                              const reg_t &input_sample_index,
-                                              const reg_t &input_shot_index,
-                                              const reg_t &input_measured_probs,
-                                              const uint_t pos_measured) const {
-  const int_t SHOTS = rnds.size();
+void TensorNet<data_t>::sample_measure_branch(
+    std::vector<SampleVector> &samples, const std::vector<double> &rnds,
+    const reg_t &input_sample_index, const reg_t &input_shot_index,
+    const reg_t &input_measured_probs, const uint_t pos_measured) const {
+  const uint_t SHOTS = rnds.size();
 
   /*---------------------------------------------------------------------------
    |  cccccccccccc  |  oooooooooooooo  |  **************  |  xxxxxxxxxxxxxx  |
@@ -1233,7 +1230,7 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
   // output tensor
   std::vector<int32_t> modes_out(nqubits * 2);
   std::vector<int64_t> extents_out(nqubits * 2);
-  for (int_t i = 0; i < nqubits; i++) {
+  for (uint_t i = 0; i < nqubits; i++) {
     modes_out[i] = modes_qubits_[pos_measured - nqubits + i];
     modes_out[i + nqubits] = modes_qubits_sp_[pos_measured - nqubits + i];
     extents_out[i] = 2;
@@ -1245,7 +1242,7 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
 
   // connect qubits not to be measured
   if (pos_measured - nqubits > 0) {
-    for (int_t i = 0; i < pos_measured - nqubits; i++) {
+    for (uint_t i = 0; i < pos_measured - nqubits; i++) {
       for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
         if (qubits_sp_[i]->modes()[j] == modes_qubits_sp_[i]) {
           qubits_sp_[i]->modes()[j] = modes_qubits_[i];
@@ -1266,7 +1263,7 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
     shots[0] = rnds;
     shot_index[0] = input_shot_index;
   } else {
-    for (int_t i = 0; i < SHOTS; i++) {
+    for (uint_t i = 0; i < SHOTS; i++) {
       shots[input_sample_index[i]].push_back(rnds[i]);
       shot_index[input_sample_index[i]].push_back(input_shot_index[i]);
     }
@@ -1276,7 +1273,7 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
   std::vector<std::shared_ptr<Tensor<data_t>>> measured_tensors;
   if (measured_qubits > 0) {
     measured_tensors.resize(measured_qubits * 2);
-    for (int_t i = 0; i < measured_qubits; i++) {
+    for (uint_t i = 0; i < measured_qubits; i++) {
       std::vector<std::complex<data_t>> prob(2, 0.0);
       prob[input_measured_probs[pos_measured + i]] = 1.0;
       measured_tensors[i * 2] = std::make_shared<Tensor<data_t>>();
@@ -1293,11 +1290,11 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
 
   // 1st loop, sampling each branch before traversing branches to reuse tensor
   // network
-  for (int_t ib = 0; ib < num_branches; ib++) {
+  for (uint_t ib = 0; ib < num_branches; ib++) {
     if (shots[ib].size() > 0) {
       if (nqubits_branch > 0) {
         // tensors for measuredirmed probabilities
-        for (int_t i = 0; i < nqubits_branch; i++) {
+        for (uint_t i = 0; i < nqubits_branch; i++) {
           std::vector<std::complex<data_t>> prob(2, 0.0);
           if (((ib >> i) & 1) == 0)
             prob[0] = 1.0;
@@ -1317,7 +1314,7 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
 
   // recover connected qubits
   if (pos_measured - nqubits > 0) {
-    for (int_t i = 0; i < pos_measured - nqubits; i++) {
+    for (uint_t i = 0; i < pos_measured - nqubits; i++) {
       for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
         if (qubits_sp_[i]->modes()[j] == modes_qubits_[i]) {
           qubits_sp_[i]->modes()[j] = modes_qubits_sp_[i];
@@ -1326,16 +1323,16 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
       }
     }
   }
-  for (int_t i = 0; i < measured_tensors.size(); i++)
+  for (uint_t i = 0; i < measured_tensors.size(); i++)
     measured_tensors[i].reset();
   delete contractor;
 
   // 2nd loop traverse branches
   if (pos_measured - nqubits > 0) {
-    for (int_t ib = 0; ib < num_branches; ib++) {
+    for (uint_t ib = 0; ib < num_branches; ib++) {
       if (shots[ib].size() > 0) {
         reg_t measured_probs = input_measured_probs;
-        for (int_t i = 0; i < nqubits_branch; i++)
+        for (uint_t i = 0; i < nqubits_branch; i++)
           measured_probs[pos_measured + i] = ((ib >> i) & 1);
 
         sample_measure_branch(samples, shots[ib], sample_index[ib],
@@ -1345,16 +1342,16 @@ void TensorNet<data_t>::sample_measure_branch(std::vector<reg_t> &samples,
     }
   } else {
     // save samples
-    for (int_t ib = 0; ib < num_branches; ib++) {
+    for (uint_t ib = 0; ib < num_branches; ib++) {
       if (shots[ib].size() > 0) {
         reg_t sample = input_measured_probs;
-        for (int_t i = 0; i < nqubits_branch; i++)
+        for (uint_t i = 0; i < nqubits_branch; i++)
           sample[pos_measured + i] = ((ib >> i) & 1);
-        for (int_t i = 0; i < shots[ib].size(); i++) {
+        for (uint_t i = 0; i < shots[ib].size(); i++) {
           uint_t shot_id = shot_index[ib][i];
-          samples[shot_id] = sample;
-          for (int_t j = 0; j < nqubits; j++) {
-            samples[shot_id][j] = ((sample_index[ib][i] >> j) & 1);
+          samples[shot_id].from_vector(sample);
+          for (uint_t j = 0; j < nqubits; j++) {
+            samples[shot_id].set(j, ((sample_index[ib][i] >> j) & 1) != 0);
           }
         }
       }
@@ -1385,7 +1382,7 @@ double TensorNet<data_t>::expval_pauli(const reg_t &qubits,
   mat_phase[3] = initial_phase;
 
   // add Pauli ops to qubits
-  for (int_t i = 0; i < size; i++) {
+  for (uint_t i = 0; i < size; i++) {
     cvector_t<data_t> mat(4, 0.0);
 
     switch (pauli[size - 1 - i]) {
@@ -1421,7 +1418,7 @@ double TensorNet<data_t>::expval_pauli(const reg_t &qubits,
   }
 
   // connect qubits not used for trace
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     if (i != qubits[0]) {
       for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
         if (qubits_sp_[i]->modes()[j] == modes_qubits_sp_[i]) {
@@ -1454,7 +1451,7 @@ double TensorNet<data_t>::expval_pauli(const reg_t &qubits,
   delete contractor;
 
   // restore connected qubits
-  for (int_t i = 0; i < num_qubits_; i++) {
+  for (uint_t i = 0; i < num_qubits_; i++) {
     if (i != qubits[0]) {
       for (int_t j = 0; j < qubits_sp_[i]->rank(); j++) {
         if (qubits_sp_[i]->modes()[j] == tmp_modes[i]) {
@@ -1465,7 +1462,7 @@ double TensorNet<data_t>::expval_pauli(const reg_t &qubits,
     }
   }
 
-  for (int_t i = 0; i < pauli_tensors.size(); i++) {
+  for (uint_t i = 0; i < pauli_tensors.size(); i++) {
     pauli_tensors[i].reset();
   }
 

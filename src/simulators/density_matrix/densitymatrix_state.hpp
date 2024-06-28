@@ -45,7 +45,7 @@ const Operations::OpSet StateOpSet(
      OpType::set_densmat,  OpType::save_expval, OpType::save_expval_var,
      OpType::save_densmat, OpType::save_probs,  OpType::save_probs_ket,
      OpType::save_amps_sq, OpType::save_state,  OpType::jump,
-     OpType::mark},
+     OpType::mark,         OpType::store},
     // Gates
     {"U",   "CX", "u1",   "u2",  "u3",    "u",     "cx",  "cy",  "cz",  "swap",
      "id",  "x",  "y",    "z",   "h",     "s",     "sdg", "t",   "tdg", "ccx",
@@ -130,8 +130,8 @@ public:
 
   // Sample n-measurement outcomes without applying the measure operation
   // to the system state
-  std::vector<reg_t> sample_measure(const reg_t &qubits, uint_t shots,
-                                    RngEngine &rng) override;
+  std::vector<SampleVector> sample_measure(const reg_t &qubits, uint_t shots,
+                                           RngEngine &rng) override;
 
   // Helper function for computing expectation value
   double expval_pauli(const reg_t &qubits, const std::string &pauli) override;
@@ -344,6 +344,9 @@ bool State<densmat_t>::allocate(uint_t num_qubits, uint_t block_bits,
     BaseState::qreg_.set_max_sampling_shots(BaseState::max_sampling_shots_);
 
   BaseState::qreg_.set_target_gpus(BaseState::target_gpus_);
+#ifdef AER_CUSTATEVEC
+  BaseState::qreg_.cuStateVec_enable(BaseState::cuStateVec_enable_);
+#endif
   BaseState::qreg_.chunk_setup(block_bits * 2, block_bits * 2, 0, 1);
 
   return true;
@@ -362,7 +365,6 @@ void State<densmat_t>::initialize_qreg(uint_t num_qubits, densmat_t &&state) {
 
 template <class densmat_t>
 void State<densmat_t>::initialize_omp() {
-  uint_t i;
   BaseState::qreg_.set_omp_threshold(omp_qubit_threshold_);
   if (BaseState::threads_ > 0)
     BaseState::qreg_.set_omp_threads(
@@ -404,7 +406,6 @@ void State<densmat_t>::set_config(const Config &config) {
 
   // Set threshold for truncating snapshots
   json_chop_threshold_ = config.chop_threshold;
-  uint_t i;
   BaseState::qreg_.set_json_chop_threshold(json_chop_threshold_);
 
   // Set OMP threshold for state update functions
@@ -650,7 +651,7 @@ void State<densmat_t>::apply_gate(const Operations::Op &op) {
     }
     if (qubits_out.size() > 0) {
       uint_t mask = 0;
-      for (int i = 0; i < qubits_out.size(); i++) {
+      for (uint_t i = 0; i < qubits_out.size(); i++) {
         mask |= (1ull << (qubits_out[i] - BaseState::qreg_.num_qubits()));
       }
       if ((BaseState::qreg_.chunk_index() & mask) != mask) {
@@ -670,7 +671,7 @@ void State<densmat_t>::apply_gate(const Operations::Op &op) {
         else if (ctrl_chunk)
           apply_gate_statevector(new_op);
         else {
-          for (int i = 0; i < new_op.qubits.size(); i++)
+          for (uint_t i = 0; i < new_op.qubits.size(); i++)
             new_op.qubits[i] += BaseState::qreg_.num_qubits();
           apply_gate_statevector(new_op);
         }
@@ -861,7 +862,7 @@ void State<densmat_t>::apply_diagonal_unitary_matrix(const reg_t &qubits,
     if (qubits_in.size() == qubits.size()) {
       BaseState::qreg_.apply_diagonal_unitary_matrix(qubits, diag);
     } else {
-      for (int_t i = 0; i < qubits.size(); i++) {
+      for (uint_t i = 0; i < qubits.size(); i++) {
         if (qubits[i] >= BaseState::qreg_.num_qubits())
           qubits_row[i] = qubits[i] + BaseState::num_global_qubits_ -
                           BaseState::qreg_.num_qubits();
@@ -871,7 +872,7 @@ void State<densmat_t>::apply_diagonal_unitary_matrix(const reg_t &qubits,
                                    diag_row);
 
       reg_t qubits_chunk(qubits_in.size() * 2);
-      for (int_t i = 0; i < qubits_in.size(); i++) {
+      for (uint_t i = 0; i < qubits_in.size(); i++) {
         qubits_chunk[i] = qubits_in[i];
         qubits_chunk[i + qubits_in.size()] =
             qubits_in[i] + BaseState::qreg_.num_qubits();
@@ -989,9 +990,9 @@ void State<densmat_t>::measure_reset_update(const reg_t &qubits,
 }
 
 template <class densmat_t>
-std::vector<reg_t> State<densmat_t>::sample_measure(const reg_t &qubits,
-                                                    uint_t shots,
-                                                    RngEngine &rng) {
+std::vector<SampleVector> State<densmat_t>::sample_measure(const reg_t &qubits,
+                                                           uint_t shots,
+                                                           RngEngine &rng) {
   // Generate flat register for storing
   std::vector<double> rnds;
   rnds.reserve(shots);
@@ -1001,18 +1002,26 @@ std::vector<reg_t> State<densmat_t>::sample_measure(const reg_t &qubits,
 
   allbit_samples = BaseState::qreg_.sample_measure(rnds);
 
-  // Convert to reg_t format
-  std::vector<reg_t> all_samples;
-  all_samples.reserve(shots);
-  for (int_t val : allbit_samples) {
-    reg_t allbit_sample = Utils::int2reg(val, 2, BaseState::qreg_.num_qubits());
-    reg_t sample;
-    sample.reserve(qubits.size());
-    for (uint_t qubit : qubits) {
-      sample.push_back(allbit_sample[qubit]);
+  // Convert to bit format
+  int_t npar = BaseState::threads_;
+  if (npar > shots)
+    npar = shots;
+  std::vector<SampleVector> all_samples(shots, SampleVector(qubits.size()));
+
+  auto convert_to_bit_lambda = [this, &allbit_samples, &all_samples, shots,
+                                qubits, npar](int_t k) {
+    uint_t ishot, iend;
+    ishot = shots * k / npar;
+    iend = shots * (k + 1) / npar;
+    for (; ishot < iend; ishot++) {
+      SampleVector allbit_sample;
+      allbit_sample.from_uint(allbit_samples[ishot], qubits.size());
+      all_samples[ishot].map(allbit_sample, qubits);
     }
-    all_samples.push_back(sample);
-  }
+  };
+  Utils::apply_omp_parallel_for((npar > 1), 0, npar, convert_to_bit_lambda,
+                                npar);
+
   return all_samples;
 }
 

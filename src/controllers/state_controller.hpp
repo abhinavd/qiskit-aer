@@ -634,7 +634,7 @@ void AerState::set_seed(int_t seed) {
 reg_t AerState::allocate_qubits(uint_t num_qubits) {
   assert_not_initialized();
   reg_t ret;
-  for (auto i = 0; i < num_qubits; ++i)
+  for (uint_t i = 0; i < num_qubits; ++i)
     ret.push_back(num_of_qubits_++);
   return ret;
 };
@@ -820,7 +820,7 @@ reg_t AerState::initialize_statevector(uint_t num_of_qubits, complex_t *data,
 
   reg_t ret;
   ret.reserve(num_of_qubits);
-  for (auto i = 0; i < num_of_qubits; ++i)
+  for (uint_t i = 0; i < num_of_qubits; ++i)
     ret.push_back(i);
   return ret;
 };
@@ -865,7 +865,7 @@ reg_t AerState::initialize_density_matrix(uint_t num_of_qubits, complex_t *data,
 
   reg_t ret;
   ret.reserve(num_of_qubits);
-  for (auto i = 0; i < num_of_qubits; ++i)
+  for (uint_t i = 0; i < num_of_qubits; ++i)
     ret.push_back(i);
   return ret;
 };
@@ -896,7 +896,7 @@ AER::Vector<complex_t> AerState::move_to_vector() {
     throw std::runtime_error("move_to_vector() supports only statevector or "
                              "matrix_product_state or density_matrix methods");
   }
-  for (auto i = 0; i < num_of_qubits_; ++i)
+  for (uint_t i = 0; i < num_of_qubits_; ++i)
     op.qubits.push_back(i);
   op.string_params.push_back("s");
   op.save_type = Operations::DataSubType::single;
@@ -911,7 +911,7 @@ AER::Vector<complex_t> AerState::move_to_vector() {
             .value()["s"]
             .value());
     clear();
-    return std::move(vec);
+    return vec;
   } else if (method_ == Method::density_matrix) {
     auto mat =
         std::move(static_cast<DataMap<AverageData, matrix<complex_t>, 1>>(
@@ -921,7 +921,7 @@ AER::Vector<complex_t> AerState::move_to_vector() {
     auto vec = Vector<complex_t>::move_from_buffer(
         mat.GetColumns() * mat.GetRows(), mat.move_to_buffer());
     clear();
-    return std::move(vec);
+    return vec;
   } else {
     throw std::runtime_error("move_to_vector() supports only statevector or "
                              "matrix_product_state or density_matrix methods");
@@ -945,7 +945,7 @@ matrix<complex_t> AerState::move_to_matrix() {
     throw std::runtime_error("move_to_matrix() supports only statevector or "
                              "matrix_product_state or density_matrix methods");
   }
-  for (auto i = 0; i < num_of_qubits_; ++i)
+  for (uint_t i = 0; i < num_of_qubits_; ++i)
     op.qubits.push_back(i);
   op.string_params.push_back("s");
   op.save_type = Operations::DataSubType::single;
@@ -970,7 +970,7 @@ matrix<complex_t> AerState::move_to_matrix() {
                 .value())["s"]
             .value());
     clear();
-    return std::move(mat);
+    return mat;
   } else {
     throw std::runtime_error("move_to_matrix() supports only statevector or "
                              "matrix_product_state or density_matrix methods");
@@ -1476,10 +1476,10 @@ std::vector<std::string> AerState::sample_memory(const reg_t &qubits,
 
   std::vector<std::string> ret;
   ret.reserve(shots);
-  std::vector<reg_t> samples = state_->sample_measure(qubits, shots, rng_);
+  std::vector<SampleVector> samples =
+      state_->sample_measure(qubits, shots, rng_);
   for (auto &sample : samples) {
-    ret.push_back(
-        Utils::int2string(Utils::reg2int(sample, 2), 2, qubits.size()));
+    ret.push_back(sample.to_string());
   }
   return ret;
 }
@@ -1490,16 +1490,11 @@ std::unordered_map<uint_t, uint_t> AerState::sample_counts(const reg_t &qubits,
 
   flush_ops();
 
-  std::vector<reg_t> samples = state_->sample_measure(qubits, shots, rng_);
+  std::vector<SampleVector> samples =
+      state_->sample_measure(qubits, shots, rng_);
   std::unordered_map<uint_t, uint_t> ret;
   for (const auto &sample : samples) {
-    uint_t sample_u = 0ULL;
-    uint_t mask = 1ULL;
-    for (const auto b : sample) {
-      if (b)
-        sample_u |= mask;
-      mask <<= 1;
-    }
+    uint_t sample_u = sample(0); // only the first 64bits is used
     if (ret.find(sample_u) == ret.end())
       ret[sample_u] = 1ULL;
     else
