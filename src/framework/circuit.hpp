@@ -277,7 +277,8 @@ public:
 
   void projection(const reg_t &qubits, const cvector_t &params) {
     ops.push_back(Operations::make_projection(qubits, params));
-
+  }
+  
   void store(const reg_t &qubits, const reg_t &clbits,
              const std::shared_ptr<Operations::CExpr> expr) {
     ops.push_back(Operations::make_store(qubits, clbits, expr));

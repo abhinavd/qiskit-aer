@@ -1048,8 +1048,10 @@ inline Op make_projection(const reg_t &qubits, const cvector_t &params) {
   op.qubits = qubits;
   op.params = params;
 
-inline Op make_store(const reg_t &qubits, const reg_t &clbits,
-                     const std::shared_ptr<CExpr> expr) {
+  return op;
+}
+
+inline Op make_store(const reg_t &qubits, const reg_t &clbits, const std::shared_ptr<CExpr> expr) {
   Op op;
   op.type = OpType::store;
   op.name = "store";
